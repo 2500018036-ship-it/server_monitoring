@@ -426,6 +426,11 @@ class Api extends CI_Controller
 			return;
 		}
 
+		if ($this->reject_revoked_agent($this->json_payload))
+		{
+			return;
+		}
+
 		$server_id = $this->Monitoring_model->upsert_server_from_payload($this->json_payload, $this->api_key);
 		$saved = $this->Monitoring_model->record_metrics($server_id, $this->json_payload, $this->input->ip_address());
 
@@ -445,6 +450,10 @@ class Api extends CI_Controller
 	protected function receive_heartbeat()
 	{
 		$this->authorize(TRUE);
+		if ($this->reject_revoked_agent($this->json_payload))
+		{
+			return;
+		}
 		$server_id = $this->Monitoring_model->upsert_server_from_payload($this->json_payload, $this->api_key);
 		$this->Monitoring_model->record_heartbeat(
 			$server_id,
@@ -459,11 +468,29 @@ class Api extends CI_Controller
 	protected function receive_logs()
 	{
 		$this->authorize(TRUE);
+		if ($this->reject_revoked_agent($this->json_payload))
+		{
+			return;
+		}
 		$server_id = $this->Monitoring_model->upsert_server_from_payload($this->json_payload, $this->api_key);
 		$logs = $this->safe_array_value($this->json_payload, 'logs', array());
 		$this->Monitoring_model->record_logs($server_id, $logs);
 
 		$this->json_response(array('ok' => TRUE, 'server_id' => $server_id, 'message' => 'Logs accepted.'), 201);
+	}
+
+	protected function reject_revoked_agent($payload)
+	{
+		$server = $this->safe_array_value($payload, 'server', array());
+		$agent_id = $this->safe_array_value($payload, 'agent_id', $this->safe_array_value($server, 'agent_id'));
+
+		if ($agent_id && $this->Monitoring_model->is_agent_revoked($agent_id))
+		{
+			$this->json_response(array('ok' => FALSE, 'message' => 'Agent has been removed from this monitoring app.'), 410);
+			return TRUE;
+		}
+
+		return FALSE;
 	}
 
 	protected function authorize($require_api_key = FALSE)

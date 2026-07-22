@@ -117,11 +117,55 @@ class Ssh_config_model extends CI_Model
 			->delete($this->table);
 	}
 
+	public function delete_with_server($id)
+	{
+		$config = $this->db
+			->where('id', (int) $id)
+			->get($this->table)
+			->row();
+
+		if ( ! $config)
+		{
+			return array('ok' => FALSE, 'server_deleted' => FALSE, 'message' => 'SSH config not found.');
+		}
+
+		$server_id = ! empty($config->server_id) ? (int) $config->server_id : 0;
+		$agent_id = 'ssh-config-'.(int) $config->id;
+		$server_deleted = FALSE;
+
+		$this->load->model('Monitoring_model');
+		$this->Monitoring_model->revoke_agent($agent_id, $server_id, 'SSH config deleted.');
+		$this->db->trans_start();
+		$this->db
+			->where('id', (int) $config->id)
+			->delete($this->table);
+
+		if ($server_id && ! $this->server_has_configs($server_id))
+		{
+			$server_deleted = $this->Monitoring_model->delete_server((int) $server_id);
+		}
+
+		$this->db->trans_complete();
+
+		return array(
+			'ok' => (bool) $this->db->trans_status(),
+			'server_deleted' => (bool) $server_deleted,
+			'message' => $this->db->trans_status() ? 'Deleted.' : 'Delete failed.',
+		);
+	}
+
 	public function touch_connected($id)
 	{
 		return $this->db
 			->where('id', (int) $id)
 			->update($this->table, array('last_connected_at' => date('Y-m-d H:i:s')));
+	}
+
+	protected function server_has_configs($server_id)
+	{
+		return $this->db
+			->where('server_id', (int) $server_id)
+			->count_all_results($this->table) > 0;
 	}
 
 	protected function prepare_record($data, $is_create)

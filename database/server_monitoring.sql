@@ -7,6 +7,7 @@ USE `server_monitoring`;
 SET FOREIGN_KEY_CHECKS = 0;
 
 DROP TABLE IF EXISTS `activity_logs`;
+DROP TABLE IF EXISTS `agent_revocations`;
 DROP TABLE IF EXISTS `api_rate_limits`;
 DROP TABLE IF EXISTS `database_backup_settings`;
 DROP TABLE IF EXISTS `backup_history`;
@@ -107,6 +108,19 @@ CREATE TABLE `servers` (
 	PRIMARY KEY (`id`),
 	KEY `servers_status_index` (`status`),
 	KEY `servers_hostname_index` (`hostname`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `agent_revocations` (
+	`agent_id` VARCHAR(128) NOT NULL,
+	`server_id` INT UNSIGNED DEFAULT NULL,
+	`reason` VARCHAR(255) DEFAULT NULL,
+	`revoked_at` DATETIME NOT NULL,
+	PRIMARY KEY (`agent_id`),
+	KEY `agent_revocations_server_id_index` (`server_id`),
+	KEY `agent_revocations_revoked_at_index` (`revoked_at`),
+	CONSTRAINT `agent_revocations_server_id_fk`
+		FOREIGN KEY (`server_id`) REFERENCES `servers` (`id`)
+		ON UPDATE CASCADE ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `settings` (

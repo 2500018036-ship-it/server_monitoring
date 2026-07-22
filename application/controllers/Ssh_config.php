@@ -10,6 +10,7 @@ class Ssh_config extends MY_Controller
 		$this->load->model('Server_model');
 		$this->load->model('Monitoring_model');
 		$this->load->library('Remote_ssh');
+		$this->load->helper('remote');
 	}
 
 	public function index()
@@ -74,16 +75,30 @@ class Ssh_config extends MY_Controller
 	public function delete($id)
 	{
 		$this->require_post();
-		$config = $this->Ssh_config_model->find((int) $id);
+		$config = $this->Ssh_config_model->find((int) $id, TRUE);
 
 		if ( ! $config)
 		{
 			show_404();
 		}
 
-		$this->Ssh_config_model->delete($config->id);
+		$cleanup = $this->remove_remote_agent($config);
+		$result = $this->Ssh_config_model->delete_with_server($config->id);
 		$this->record_activity('Delete SSH Config: '.$config->name);
-		$this->session->set_flashdata('success', 'SSH configuration berhasil dihapus.');
+
+		if ($result['ok'])
+		{
+			$message = 'SSH configuration dan server monitoring berhasil dihapus.';
+			if ( ! $cleanup['ok'])
+			{
+				$message .= ' Local data sudah dihapus, tetapi remote agent tidak bisa dibersihkan otomatis: '.$cleanup['message'];
+			}
+			$this->session->set_flashdata('success', html_escape($message));
+		}
+		else
+		{
+			$this->session->set_flashdata('error', 'SSH configuration gagal dihapus.');
+		}
 
 		redirect('ssh-config');
 	}
@@ -243,5 +258,67 @@ class Ssh_config extends MY_Controller
 		}
 
 		return $details;
+	}
+
+	protected function remove_remote_agent($config)
+	{
+		$sudo = $this->sudo_prefix($config);
+
+		if ($sudo === FALSE)
+		{
+			return array('ok' => FALSE, 'message' => 'Tidak bisa mendapatkan akses sudo ke server.');
+		}
+
+		$command = implode("\n", array(
+			'if command -v systemctl >/dev/null 2>&1; then',
+			'  '.$sudo.'systemctl disable --now monitoring-agent >/dev/null 2>&1 || true',
+			'fi',
+			$sudo.'rm -f /etc/systemd/system/monitoring-agent.service /etc/server-monitoring-agent.env',
+			$sudo.'rm -rf /opt/server-monitoring-agent',
+			'if command -v systemctl >/dev/null 2>&1; then',
+			'  '.$sudo.'systemctl daemon-reload >/dev/null 2>&1 || true',
+			'fi',
+			'echo "monitoring-agent removed"',
+		));
+		$result = $this->remote_ssh->execute($config, $command, 30);
+
+		return array(
+			'ok' => (bool) $result['ok'],
+			'message' => trim((string) $result['output']) ?: ($result['ok'] ? 'Remote agent removed.' : 'Remote cleanup failed.'),
+		);
+	}
+
+	protected function sudo_prefix($config)
+	{
+		$uid = $this->remote_ssh->execute($config, 'id -u', 10);
+
+		if ( ! $uid['ok'])
+		{
+			return FALSE;
+		}
+
+		if (trim((string) $uid['output']) === '0')
+		{
+			return '';
+		}
+
+		$sudo = $this->remote_ssh->execute($config, 'sudo -n true', 10);
+		if ($sudo['ok'])
+		{
+			return 'sudo -n ';
+		}
+
+		if (isset($config->auth_type) && $config->auth_type === 'password' && ! empty($config->password))
+		{
+			$password_sudo = 'printf '.remote_arg('%s\n').' '.remote_arg($config->password).' | sudo -S -p '.remote_arg(''). ' ';
+			$check = $this->remote_ssh->execute($config, $password_sudo.'true', 10);
+
+			if ($check['ok'])
+			{
+				return $password_sudo;
+			}
+		}
+
+		return FALSE;
 	}
 }

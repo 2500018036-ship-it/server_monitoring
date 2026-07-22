@@ -356,6 +356,63 @@ class Monitoring_model extends CI_Model
 		return TRUE;
 	}
 
+	public function revoke_agent($agent_id, $server_id = NULL, $reason = 'Agent revoked.')
+	{
+		$agent_id = trim((string) $agent_id);
+		if ($agent_id === '')
+		{
+			return FALSE;
+		}
+
+		$this->ensure_agent_revocations_table();
+		$row = array(
+			'agent_id' => $agent_id,
+			'server_id' => $server_id ? (int) $server_id : NULL,
+			'reason' => trim((string) $reason),
+			'revoked_at' => date('Y-m-d H:i:s'),
+		);
+
+		return $this->db->replace('agent_revocations', $row);
+	}
+
+	public function is_agent_revoked($agent_id)
+	{
+		$agent_id = trim((string) $agent_id);
+		if ($agent_id === '')
+		{
+			return FALSE;
+		}
+
+		$this->ensure_agent_revocations_table();
+
+		return $this->db
+			->where('agent_id', $agent_id)
+			->count_all_results('agent_revocations') > 0;
+	}
+
+	public function delete_server($server_id)
+	{
+		$server_id = (int) $server_id;
+		if ( ! $server_id)
+		{
+			return FALSE;
+		}
+
+		foreach ($this->db->list_tables() as $table)
+		{
+			if (in_array($table, array('servers', 'ssh_config', 'agent_revocations'), TRUE) || ! $this->db->field_exists('server_id', $table))
+			{
+				continue;
+			}
+
+			$this->db->where('server_id', $server_id)->delete($table);
+		}
+
+		return $this->db
+			->where('id', $server_id)
+			->delete('servers');
+	}
+
 	protected function dispatch_monitoring_notifications($server_id, $payload, $metric_time)
 	{
 		try
@@ -1584,6 +1641,26 @@ class Monitoring_model extends CI_Model
 		$this->prune_table('heartbeat', 'heartbeat_at', $log_days);
 
 		return TRUE;
+	}
+
+	protected function ensure_agent_revocations_table()
+	{
+		if ($this->db->table_exists('agent_revocations'))
+		{
+			return TRUE;
+		}
+
+		return $this->db->query(
+			"CREATE TABLE IF NOT EXISTS `agent_revocations` (
+				`agent_id` VARCHAR(128) NOT NULL,
+				`server_id` INT UNSIGNED DEFAULT NULL,
+				`reason` VARCHAR(255) DEFAULT NULL,
+				`revoked_at` DATETIME NOT NULL,
+				PRIMARY KEY (`agent_id`),
+				KEY `agent_revocations_server_id_index` (`server_id`),
+				KEY `agent_revocations_revoked_at_index` (`revoked_at`)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
 	}
 
 	protected function prune_table($table, $time_field, $days)
