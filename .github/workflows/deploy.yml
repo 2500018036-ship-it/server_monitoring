@@ -1,0 +1,49 @@
+name: Deploy Production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script_stop: true
+          script: |
+            set -e
+            DEPLOY_PATH="${DEPLOY_PATH:-/opt/server_monitoring}"
+            REPO_URL="https://github.com/2500018036-ship-it/server_monitoring.git"
+            BRANCH="main"
+
+            if [ ! -d "$DEPLOY_PATH/.git" ]; then
+              sudo mkdir -p "$DEPLOY_PATH"
+              sudo chown "$USER:$USER" "$DEPLOY_PATH"
+              git clone --branch "$BRANCH" "$REPO_URL" "$DEPLOY_PATH"
+            fi
+
+            cd "$DEPLOY_PATH"
+            git remote set-url origin "$REPO_URL"
+            git fetch origin "$BRANCH"
+            git checkout "$BRANCH"
+            git pull --ff-only origin "$BRANCH"
+
+            test -f .env || {
+              echo "File .env production belum ada di $DEPLOY_PATH"
+              exit 1
+            }
+
+            docker compose --env-file .env up -d --build --remove-orphans
+            docker compose --env-file .env ps
