@@ -1,0 +1,287 @@
+.brand-link .brand-image {
+	font-size: 1.35rem;
+	line-height: 1;
+	opacity: .9;
+}
+
+.navbar-avatar {
+	width: 28px;
+	height: 28px;
+	object-fit: cover;
+}
+
+.server-switcher .nav-link {
+	gap: .45rem;
+	max-width: 420px;
+}
+
+.server-switcher-current {
+	display: flex;
+	flex-direction: column;
+	line-height: 1.05;
+	max-width: 220px;
+}
+
+.server-switcher-current small,
+.server-switcher-item small {
+	display: block;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.server-status-dot {
+	width: .7rem;
+	height: .7rem;
+	border-radius: 50%;
+	display: inline-block;
+	flex: 0 0 .7rem;
+	box-shadow: 0 0 0 2px rgba(0, 0, 0, .08);
+}
+
+.server-status-dot.status-online {
+	background: #28a745;
+}
+
+.server-status-dot.status-warning {
+	background: #ffc107;
+}
+
+.server-status-dot.status-offline {
+	background: #dc3545;
+}
+
+.server-switcher-item {
+	min-width: 0;
+	margin-left: .65rem;
+}
+
+.server-switcher-item strong {
+	display: block;
+	max-width: 220px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.table-avatar {
+	width: 38px;
+	height: 38px;
+	border-radius: 50%;
+	object-fit: cover;
+}
+
+.modal-avatar {
+	width: 64px;
+	height: 64px;
+	border-radius: 50%;
+	object-fit: cover;
+}
+
+.settings-preview {
+	max-width: 120px;
+	max-height: 56px;
+	object-fit: contain;
+	padding: .35rem;
+	border: 1px solid #dee2e6;
+	border-radius: .25rem;
+	background: #fff;
+}
+
+.chart-card {
+	min-height: 320px;
+}
+
+.chart-card canvas {
+	min-height: 280px;
+}
+
+.chart-card-sm {
+	min-height: 230px;
+}
+
+.chart-card-sm canvas {
+	min-height: 190px;
+}
+
+.empty-state {
+	min-height: 300px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	text-align: center;
+	flex-direction: column;
+}
+
+.empty-state i {
+	font-size: 4rem;
+	color: #17a2b8;
+	margin-bottom: 1rem;
+}
+
+.empty-state h3 {
+	font-size: 1.5rem;
+	font-weight: 600;
+}
+
+.empty-state p {
+	max-width: 620px;
+	color: #6c757d;
+	margin-bottom: 0;
+}
+
+.login-logo a {
+	font-weight: 600;
+}
+
+.btn-group-sm > .btn,
+.btn-sm {
+	min-width: 34px;
+}
+
+.nav-logout-form .nav-link {
+	width: 100%;
+	text-align: left;
+}
+
+.nav-logout-form .nav-link p {
+	display: inline;
+	margin: 0;
+}
+
+.realtime-server-selector {
+	max-width: 360px;
+	margin-left: auto;
+}
+
+.realtime-kv th {
+	width: 42%;
+	color: #6c757d;
+	font-weight: 600;
+}
+
+.realtime-kv {
+	table-layout: fixed;
+	width: 100%;
+}
+
+.realtime-kv td {
+	word-break: break-word;
+	overflow-wrap: anywhere;
+}
+
+.realtime-metrics {
+	display: grid;
+	gap: .75rem;
+}
+
+.realtime-metrics div {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: .75rem;
+	border-bottom: 1px solid #edf0f2;
+	padding-bottom: .5rem;
+}
+
+.realtime-metrics div:last-child {
+	border-bottom: 0;
+	padding-bottom: 0;
+}
+
+.realtime-metrics span {
+	color: #6c757d;
+	font-size: .85rem;
+}
+
+.realtime-metrics strong {
+	text-align: right;
+	max-width: 62%;
+	word-break: break-word;
+}
+
+.realtime-table {
+	min-width: 720px;
+}
+
+.text-truncate-sm {
+	max-width: 260px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.realtime-log-panel,
+.log-viewer-panel {
+	max-height: 460px;
+	overflow: auto;
+}
+
+.terminal-surface {
+	background: #101418;
+	color: #d7dde5;
+	border-radius: .25rem;
+	min-height: 420px;
+	padding: 1rem;
+	font-family: Consolas, Monaco, monospace;
+	overflow: auto;
+}
+
+.terminal-surface .prompt {
+	color: #20c997;
+}
+
+.xterm-shell {
+	background: #101418;
+	border-radius: .25rem;
+	min-height: 430px;
+	padding: .5rem;
+	overflow: hidden;
+}
+
+.quick-action-button {
+	min-height: 92px;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	white-space: normal;
+}
+
+.quick-action-button i {
+	font-size: 1.4rem;
+}
+
+.CodeMirror {
+	height: 560px;
+	border-radius: .25rem;
+}
+
+.dark-mode .settings-preview {
+	background: #f8f9fa;
+	border-color: #4b545c;
+}
+
+.dark-mode .realtime-metrics div {
+	border-bottom-color: #3f474e;
+}
+
+@media (max-width: 575.98px) {
+	.content-header h1 {
+		font-size: 1.55rem;
+	}
+
+	.card-title {
+		font-size: 1rem;
+	}
+
+	.table-avatar {
+		width: 34px;
+		height: 34px;
+	}
+
+	.realtime-server-selector {
+		max-width: 100%;
+		margin-left: 0;
+	}
+}

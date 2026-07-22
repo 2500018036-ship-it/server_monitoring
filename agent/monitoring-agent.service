@@ -1,0 +1,16 @@
+[Unit]
+Description=Server Monitoring Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/server-monitoring-agent.env
+ExecStart=/usr/bin/python3 /opt/server-monitoring-agent/monitoring_agent.py
+Restart=always
+RestartSec=3
+User=root
+WorkingDirectory=/opt/server-monitoring-agent
+
+[Install]
+WantedBy=multi-user.target
