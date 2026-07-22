@@ -316,6 +316,8 @@ def service_payload():
 			continue
 		active_state = parts[2]
 		sub_state = parts[3]
+		if active_state == "inactive" and sub_state in ("dead", "exited"):
+			continue
 		items.append({
 			"name": unit,
 			"status": "running" if active_state == "active" else "stopped",

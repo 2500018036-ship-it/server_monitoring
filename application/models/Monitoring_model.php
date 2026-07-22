@@ -1433,7 +1433,35 @@ class Monitoring_model extends CI_Model
 			$latest_payload = array();
 		}
 
-		return array_replace_recursive($latest_payload, $payload);
+		$merged = array_replace_recursive($latest_payload, $payload);
+
+		foreach (array('services', 'websites', 'logs') as $list_key)
+		{
+			if (array_key_exists($list_key, $payload))
+			{
+				$merged[$list_key] = $payload[$list_key];
+			}
+		}
+
+		if (isset($payload['processes']) && is_array($payload['processes']))
+		{
+			$merged['processes'] = $payload['processes'];
+		}
+
+		if (isset($payload['docker']['containers']))
+		{
+			$merged['docker']['containers'] = $payload['docker']['containers'];
+		}
+
+		foreach (array('cpu', 'memory') as $group)
+		{
+			if (isset($payload[$group]['top_processes']))
+			{
+				$merged[$group]['top_processes'] = $payload[$group]['top_processes'];
+			}
+		}
+
+		return $merged;
 	}
 
 	protected function sanitize_payload($payload)

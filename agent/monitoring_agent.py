@@ -3,6 +3,7 @@ import json
 import os
 import platform
 import pwd
+import shutil
 import socket
 import ssl
 import subprocess
@@ -49,7 +50,7 @@ class NetworkSpeed:
 
 	def snapshot(self):
 		if not psutil:
-			return {}
+			return self.proc_snapshot()
 
 		now = time.time()
 		counters = psutil.net_io_counters(pernic=True)
@@ -74,6 +75,39 @@ class NetworkSpeed:
 				"total_download": data.bytes_recv,
 				"packet_sent": data.packets_sent,
 				"packet_received": data.packets_recv,
+				"packet_loss": 0,
+				"active_connections": active_connections(),
+			}
+			break
+
+		self.previous = current
+		self.previous_time = now
+		return result
+
+	def proc_snapshot(self):
+		now = time.time()
+		counters = proc_net_dev()
+		current = {}
+		result = {}
+
+		for interface, data in counters.items():
+			if interface == "lo":
+				continue
+
+			current[interface] = data
+			previous_data = self.previous.get(interface) if isinstance(self.previous, dict) and self.previous else None
+			elapsed = max(now - self.previous_time, 1) if self.previous_time else 1
+			upload_speed = int((data["bytes_sent"] - previous_data["bytes_sent"]) / elapsed) if previous_data else 0
+			download_speed = int((data["bytes_recv"] - previous_data["bytes_recv"]) / elapsed) if previous_data else 0
+
+			result = {
+				"interface_name": interface,
+				"upload_speed": max(upload_speed, 0),
+				"download_speed": max(download_speed, 0),
+				"total_upload": data["bytes_sent"],
+				"total_download": data["bytes_recv"],
+				"packet_sent": data["packets_sent"],
+				"packet_received": data["packets_recv"],
 				"packet_loss": 0,
 				"active_connections": active_connections(),
 			}
@@ -193,7 +227,7 @@ def cpu_payload(include_processes=False):
 		frequency = round(freq.current, 2) if freq else 0
 		usage = psutil.cpu_percent(interval=0.2)
 	else:
-		usage = 0
+		usage = cpu_usage_proc()
 
 	try:
 		with open("/proc/cpuinfo", "r", encoding="utf-8") as handle:
@@ -204,7 +238,7 @@ def cpu_payload(include_processes=False):
 	except Exception:
 		model = platform.processor()
 
-	return {
+	data = {
 		"usage_percent": usage,
 		"cores": psutil.cpu_count() if psutil else os.cpu_count(),
 		"model": model,
@@ -212,18 +246,40 @@ def cpu_payload(include_processes=False):
 		"load_1": round(load[0], 2),
 		"load_5": round(load[1], 2),
 		"load_15": round(load[2], 2),
-		"top_processes": top_processes("cpu") if include_processes else [],
 	}
+
+	if include_processes:
+		data["top_processes"] = top_processes("cpu")
+
+	return data
 
 
 def memory_payload(include_processes=False):
 	if not psutil:
-		return {"top_processes": top_processes("memory") if include_processes else []}
+		info = meminfo()
+		total = info.get("MemTotal", 0)
+		available = info.get("MemAvailable", info.get("MemFree", 0))
+		used = max(total - available, 0)
+		swap_total = info.get("SwapTotal", 0)
+		swap_free = info.get("SwapFree", 0)
+		data = {
+			"total_mb": kb_to_mb(total),
+			"used_mb": kb_to_mb(used),
+			"free_mb": kb_to_mb(available),
+			"cache_mb": kb_to_mb(info.get("Cached", 0)),
+			"buffer_mb": kb_to_mb(info.get("Buffers", 0)),
+			"swap_used_mb": kb_to_mb(max(swap_total - swap_free, 0)),
+			"swap_free_mb": kb_to_mb(swap_free),
+			"usage_percent": round((used / float(total)) * 100, 2) if total else 0,
+		}
+		if include_processes:
+			data["top_processes"] = top_processes("memory")
+		return data
 
 	virtual = psutil.virtual_memory()
 	swap = psutil.swap_memory()
 
-	return {
+	data = {
 		"total_mb": bytes_to_mb(virtual.total),
 		"used_mb": bytes_to_mb(virtual.used),
 		"free_mb": bytes_to_mb(virtual.available),
@@ -232,14 +288,30 @@ def memory_payload(include_processes=False):
 		"swap_used_mb": bytes_to_mb(swap.used),
 		"swap_free_mb": bytes_to_mb(swap.free),
 		"usage_percent": virtual.percent,
-		"top_processes": top_processes("memory") if include_processes else [],
 	}
+
+	if include_processes:
+		data["top_processes"] = top_processes("memory")
+
+	return data
 
 
 def storage_payload():
 	speed = disk_speed.snapshot()
 	if not psutil:
-		return speed
+		usage = shutil.disk_usage("/")
+		root = {
+			"mount_point": "/",
+			"disk_total_gb": bytes_to_gb(usage.total),
+			"disk_used_gb": bytes_to_gb(usage.used),
+			"disk_free_gb": bytes_to_gb(usage.free),
+			"disk_percentage": round((usage.used / float(usage.total)) * 100, 2) if usage.total else 0,
+			"disk_read_speed": speed["disk_read_speed"],
+			"disk_write_speed": speed["disk_write_speed"],
+			"iops": speed["iops"],
+		}
+		root["disks"] = [dict(root)]
+		return root
 
 	disks = []
 	for partition in psutil.disk_partitions(all=False):
@@ -285,7 +357,7 @@ def system_payload():
 
 def top_processes(kind):
 	if not psutil:
-		return []
+		return top_processes_proc(kind)
 
 	items = []
 	for proc in psutil.process_iter(["pid", "username", "name", "cmdline", "cpu_percent", "memory_percent", "create_time"]):
@@ -337,10 +409,108 @@ def total_threads():
 
 def active_connections():
 	if not psutil:
-		return 0
+		return proc_active_connections()
 
 	try:
 		return len(psutil.net_connections(kind="inet"))
+	except Exception:
+		return 0
+
+
+def cpu_times_proc():
+	try:
+		with open("/proc/stat", "r", encoding="utf-8") as handle:
+			values = [int(item) for item in handle.readline().split()[1:]]
+		idle = values[3] + (values[4] if len(values) > 4 else 0)
+		return idle, sum(values)
+	except Exception:
+		return 0, 0
+
+
+def cpu_usage_proc():
+	idle_a, total_a = cpu_times_proc()
+	time.sleep(0.2)
+	idle_b, total_b = cpu_times_proc()
+	total_delta = total_b - total_a
+	idle_delta = idle_b - idle_a
+
+	if total_delta <= 0:
+		return 0
+
+	return round((1 - (idle_delta / float(total_delta))) * 100, 2)
+
+
+def meminfo():
+	data = {}
+	try:
+		with open("/proc/meminfo", "r", encoding="utf-8") as handle:
+			for line in handle:
+				key, value = line.split(":", 1)
+				data[key] = int(value.strip().split()[0])
+	except Exception:
+		pass
+	return data
+
+
+def proc_net_dev():
+	counters = {}
+	try:
+		with open("/proc/net/dev", "r", encoding="utf-8") as handle:
+			for line in handle.readlines()[2:]:
+				if ":" not in line:
+					continue
+				interface, values = line.split(":", 1)
+				interface = interface.strip()
+				parts = values.split()
+				if len(parts) < 16:
+					continue
+				counters[interface] = {
+					"bytes_recv": int(parts[0]),
+					"packets_recv": int(parts[1]),
+					"bytes_sent": int(parts[8]),
+					"packets_sent": int(parts[9]),
+				}
+	except Exception:
+		pass
+	return counters
+
+
+def proc_active_connections():
+	total = 0
+	for path in ("/proc/net/tcp", "/proc/net/tcp6"):
+		try:
+			with open(path, "r", encoding="utf-8") as handle:
+				total += max(len(handle.readlines()) - 1, 0)
+		except Exception:
+			pass
+	return total
+
+
+def top_processes_proc(kind):
+	output = command(["ps", "-eo", "pid,user,comm,%cpu,%mem,etimes"], timeout=4)
+	items = []
+
+	for line in output.splitlines()[1:]:
+		parts = line.split(None, 5)
+		if len(parts) < 6:
+			continue
+
+		items.append({
+			"pid": int(parts[0]) if parts[0].isdigit() else None,
+			"user": parts[1],
+			"command": parts[2],
+			"cpu": safe_float(parts[3]),
+			"ram": safe_float(parts[4]),
+			"running_time": parts[5] + "s",
+		})
+
+	key = "ram" if kind == "memory" else "cpu"
+	return sorted(items, key=lambda item: item[key], reverse=True)[:20]
+
+
+def safe_float(value):
+	try:
+		return round(float(value), 2)
 	except Exception:
 		return 0
 
@@ -387,6 +557,9 @@ def service_state(service):
 
 	active_state = props.get("ActiveState", "")
 	sub_state = props.get("SubState", "")
+
+	if active_state == "inactive" and sub_state in ("dead", "exited"):
+		return None
 
 	return {
 		"status": "running" if active_state == "active" else "stopped",
@@ -637,6 +810,10 @@ def unique_logs(items):
 
 def bytes_to_mb(value):
 	return int(value / 1024 / 1024)
+
+
+def kb_to_mb(value):
+	return int(value / 1024)
 
 
 def bytes_to_gb(value):
