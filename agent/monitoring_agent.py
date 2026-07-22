@@ -256,7 +256,7 @@ def storage_payload():
 			"iops": speed["iops"],
 		})
 
-	root = disks[0] if disks else speed
+	root = dict(disks[0]) if disks else dict(speed)
 	root["disks"] = disks
 	return root
 
