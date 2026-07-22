@@ -7,13 +7,13 @@ class Activity_model extends CI_Model
 
 	public function log($user_id, $activity, $ip_address, $server_id = NULL, $status = 'success', $details = NULL)
 	{
-		if (empty($user_id) || empty($activity))
+		if (empty($activity))
 		{
 			return FALSE;
 		}
 
 		$data = array(
-			'user_id' => $user_id,
+			'user_id' => empty($user_id) ? NULL : (int) $user_id,
 			'activity' => $activity,
 			'ip_address' => $ip_address,
 			'created_at' => date('Y-m-d H:i:s'),

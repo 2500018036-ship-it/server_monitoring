@@ -179,6 +179,12 @@ class Ssh_config_model extends CI_Model
 			$config->password = $this->decrypt_value($config->password_encrypted);
 			$config->private_key = $this->decrypt_value($config->private_key_encrypted);
 			$config->passphrase = $this->decrypt_value($config->passphrase_encrypted);
+			$config->password_decrypt_failed = ! empty($config->password_encrypted) && $config->password === FALSE;
+			$config->private_key_decrypt_failed = ! empty($config->private_key_encrypted) && $config->private_key === FALSE;
+			$config->passphrase_decrypt_failed = ! empty($config->passphrase_encrypted) && $config->passphrase === FALSE;
+			$config->password = $config->password === FALSE ? NULL : $config->password;
+			$config->private_key = $config->private_key === FALSE ? NULL : $config->private_key;
+			$config->passphrase = $config->passphrase === FALSE ? NULL : $config->passphrase;
 		}
 
 		return $config;

@@ -21,18 +21,96 @@ class Api extends CI_Controller
 		$server_id = (int) $this->input->get('server_id', TRUE);
 		$payload = $this->Monitoring_model->dashboard_payload($server_id);
 
-		$this->json_response(array(
-			'ok' => TRUE,
-			'servers' => $this->format_servers($payload['servers']),
-			'selected_server_id' => $payload['selected_server_id'],
-			'server' => $this->format_server($payload['server']),
-			'metric' => $this->format_metric($payload['metric']),
-			'metric_time' => $payload['metric'] ? $payload['metric']->metric_time : NULL,
-			'payload' => $payload['payload'],
-			'heartbeat' => $this->format_heartbeat($payload['heartbeat']),
-			'alerts' => $payload['alerts'],
-			'charts' => $payload['charts'],
-		));
+		$this->json_response($this->format_dashboard_payload($payload));
+	}
+
+	public function stream()
+	{
+		$this->authorize();
+
+		if ( ! $this->is_session_authenticated())
+		{
+			$this->stream_headers(403);
+			$this->stream_event('error', array('ok' => FALSE, 'message' => 'Session login diperlukan.'));
+			exit;
+		}
+
+		$server_id = (int) $this->input->get('server_id', TRUE);
+		$last_id = trim((string) $this->input->get('last_id', TRUE));
+		$last_event_id = isset($_SERVER['HTTP_LAST_EVENT_ID']) ? trim((string) $_SERVER['HTTP_LAST_EVENT_ID']) : '';
+
+		if ($last_id === '' && $last_event_id !== '')
+		{
+			$last_id = $last_event_id;
+		}
+
+		$this->stream_headers();
+
+		if (function_exists('session_write_close'))
+		{
+			session_write_close();
+		}
+
+		$started_at = time();
+		$sent_first = FALSE;
+
+		while ( ! connection_aborted())
+		{
+			$payload = $this->Monitoring_model->dashboard_payload($server_id);
+			$stream_id = $this->stream_signature($payload);
+
+			if ( ! $sent_first || $stream_id !== $last_id)
+			{
+				$this->stream_event('monitoring', $this->format_dashboard_payload($payload, array(
+					'stream_id' => $stream_id,
+					'stream_mode' => 'sse',
+				)), $stream_id);
+				$last_id = $stream_id;
+				$sent_first = TRUE;
+			}
+			else
+			{
+				$this->stream_keepalive();
+			}
+
+			if ((time() - $started_at) >= 25)
+			{
+				break;
+			}
+
+			usleep(500000);
+		}
+
+		exit;
+	}
+
+	public function monitoring()
+	{
+		$this->authorize();
+
+		if ( ! $this->is_session_authenticated())
+		{
+			$this->json_response(array('ok' => FALSE, 'message' => 'Session login diperlukan.'), 403);
+			return;
+		}
+
+		if ($this->input->method(TRUE) !== 'POST')
+		{
+			$this->json_response(array('ok' => FALSE, 'message' => 'Method not allowed.'), 405);
+			return;
+		}
+
+		$server_id = (int) $this->input->post('server_id', TRUE);
+		$pull = $this->collect_ssh_metrics($server_id);
+		$selected_server_id = $server_id ?: (! empty($pull['server_id']) ? (int) $pull['server_id'] : 0);
+		$payload = $this->Monitoring_model->dashboard_payload($selected_server_id);
+
+		$this->json_response($this->format_dashboard_payload($payload, array(
+			'pull_ok' => (bool) $pull['ok'],
+			'pull_status' => (int) $pull['status'],
+			'pull_message' => $pull['message'],
+			'csrf_hash' => $this->security->get_csrf_hash(),
+		)));
 	}
 
 	public function pull_ssh_metrics()
@@ -51,11 +129,26 @@ class Api extends CI_Controller
 			return;
 		}
 
-		$this->load->model('Ssh_config_model');
-		$this->load->library('Remote_metric_collector');
-
 		$server_id = (int) $this->input->post('server_id', TRUE);
 		$ssh_config_id = (int) $this->input->post('ssh_config_id', TRUE);
+		$pull = $this->collect_ssh_metrics($server_id, $ssh_config_id);
+
+		$this->json_response(array(
+			'ok' => (bool) $pull['ok'],
+			'server_id' => $pull['server_id'],
+			'message' => $pull['message'],
+			'csrf_hash' => $this->security->get_csrf_hash(),
+		), $pull['status']);
+	}
+
+	protected function collect_ssh_metrics($server_id = 0, $ssh_config_id = 0)
+	{
+		$this->load->model('Ssh_config_model');
+		$this->load->library('Remote_metric_collector');
+		$this->Monitoring_model->sync_ssh_config_servers();
+
+		$server_id = (int) $server_id;
+		$ssh_config_id = (int) $ssh_config_id;
 		$config = $ssh_config_id ? $this->Ssh_config_model->find($ssh_config_id, TRUE) : NULL;
 
 		if ($config && $config->status !== 'active')
@@ -68,45 +161,55 @@ class Api extends CI_Controller
 			$config = $server_id ? $this->Ssh_config_model->find_active_by_server($server_id, TRUE) : NULL;
 		}
 
-		if ( ! $config)
+		if ( ! $config && ! $server_id && ! $ssh_config_id)
 		{
 			$config = $this->Ssh_config_model->first_active(TRUE);
 		}
 
 		if ( ! $config)
 		{
-			$this->json_response(array(
+			return array(
 				'ok' => FALSE,
+				'status' => 404,
 				'message' => 'Belum ada SSH Config aktif untuk pull monitoring.',
-				'csrf_hash' => $this->security->get_csrf_hash(),
-			), 404);
-			return;
+				'server_id' => $server_id,
+			);
 		}
 
+		$target_server_id = ! empty($config->server_id) ? (int) $config->server_id : $server_id;
 		$collected = $this->remote_metric_collector->collect($config);
 
 		if ( ! $collected['ok'])
 		{
-			$this->json_response(array(
+			if ($target_server_id)
+			{
+				$this->Monitoring_model->record_connection_failure(
+					$target_server_id,
+					$this->ssh_status_failure_message($collected['message']),
+					'ssh-pull'
+				);
+			}
+
+			return array(
 				'ok' => FALSE,
+				'status' => 502,
 				'message' => $collected['message'],
-				'csrf_hash' => $this->security->get_csrf_hash(),
-			), 502);
-			return;
+				'server_id' => $target_server_id,
+			);
 		}
 
-		$preferred_server_id = ! empty($config->server_id) ? (int) $config->server_id : NULL;
+		$preferred_server_id = $target_server_id ?: NULL;
 		$saved_server_id = $this->Monitoring_model->upsert_server_from_payload($collected['payload'], 'ssh-pull', $preferred_server_id);
 		$saved = $this->Monitoring_model->record_metrics($saved_server_id, $collected['payload'], $config->host);
 
 		if ( ! $saved)
 		{
-			$this->json_response(array(
+			return array(
 				'ok' => FALSE,
+				'status' => 500,
 				'message' => 'Metrics SSH tidak bisa disimpan.',
-				'csrf_hash' => $this->security->get_csrf_hash(),
-			), 500);
-			return;
+				'server_id' => $saved_server_id,
+			);
 		}
 
 		if (empty($config->server_id) || (int) $config->server_id !== (int) $saved_server_id)
@@ -116,12 +219,24 @@ class Api extends CI_Controller
 
 		$this->Ssh_config_model->touch_connected($config->id);
 
-		$this->json_response(array(
+		return array(
 			'ok' => TRUE,
-			'server_id' => $saved_server_id,
+			'status' => 201,
 			'message' => 'Metrics SSH tersimpan.',
-			'csrf_hash' => $this->security->get_csrf_hash(),
-		), 201);
+			'server_id' => $saved_server_id,
+		);
+	}
+
+	protected function ssh_status_failure_message($message)
+	{
+		$message = trim((string) $message);
+
+		if ($message === '')
+		{
+			return 'SSH gagal terkoneksi.';
+		}
+
+		return 'Status Offline: '.$message;
 	}
 
 	public function cpu()
@@ -383,6 +498,57 @@ class Api extends CI_Controller
 		return is_array($user) && ! empty($user['id']);
 	}
 
+	protected function stream_headers($status = 200)
+	{
+		@ini_set('zlib.output_compression', '0');
+		@ini_set('output_buffering', 'off');
+		@ini_set('implicit_flush', '1');
+		@set_time_limit(0);
+		@ignore_user_abort(TRUE);
+
+		while (ob_get_level() > 0)
+		{
+			@ob_end_flush();
+		}
+
+		$this->output->set_status_header($status);
+		header('Content-Type: text/event-stream');
+		header('Cache-Control: no-cache, no-transform');
+		header('Connection: keep-alive');
+		header('X-Accel-Buffering: no');
+		@ob_implicit_flush(TRUE);
+	}
+
+	protected function stream_event($event, $data, $id = NULL)
+	{
+		if ($id !== NULL)
+		{
+			echo 'id: '.$id."\n";
+		}
+
+		echo 'event: '.$event."\n";
+		echo 'data: '.json_encode($data)."\n\n";
+		@flush();
+	}
+
+	protected function stream_keepalive()
+	{
+		echo ': keepalive '.date('c')."\n\n";
+		@flush();
+	}
+
+	protected function stream_signature($payload)
+	{
+		$server = isset($payload['server']) ? $payload['server'] : NULL;
+		$metric = isset($payload['metric']) ? $payload['metric'] : NULL;
+		$selected = isset($payload['selected_server_id']) ? (int) $payload['selected_server_id'] : 0;
+		$metric_time = $metric && isset($metric->metric_time) ? $metric->metric_time : '';
+		$updated_at = $server && isset($server->updated_at) ? $server->updated_at : '';
+		$heartbeat = $server && isset($server->last_heartbeat_at) ? $server->last_heartbeat_at : '';
+
+		return sha1($selected.'|'.$metric_time.'|'.$updated_at.'|'.$heartbeat);
+	}
+
 	protected function read_json_payload()
 	{
 		$raw = $this->input->raw_input_stream;
@@ -491,6 +657,29 @@ class Api extends CI_Controller
 		}
 
 		return TRUE;
+	}
+
+	protected function format_dashboard_payload($payload, $extra = array())
+	{
+		return array_merge(array(
+			'ok' => TRUE,
+			'servers' => $this->format_servers($payload['servers']),
+			'selected_server_id' => $payload['selected_server_id'],
+			'server' => $this->format_server($payload['server']),
+			'metric' => $this->format_metric($payload['metric']),
+			'metric_time' => $payload['metric'] ? $payload['metric']->metric_time : NULL,
+			'payload' => $payload['payload'],
+			'heartbeat' => $this->format_heartbeat($payload['heartbeat']),
+			'alerts' => $payload['alerts'],
+			'charts' => $payload['charts'],
+			'process_cpu' => $this->format_processes($payload['process_cpu']),
+			'process_memory' => $this->format_processes($payload['process_memory']),
+			'services' => $this->format_services($payload['services']),
+			'docker' => $this->format_docker($payload['docker']),
+			'database' => $this->format_database($payload['database']),
+			'websites' => $this->format_websites($payload['websites']),
+			'logs' => $this->format_logs($payload['logs']),
+		), $extra);
 	}
 
 	protected function format_servers($servers)
@@ -638,6 +827,27 @@ class Api extends CI_Controller
 				'uptime_seconds' => $row->uptime_seconds,
 				'last_backup' => $row->last_backup,
 				'logged_at' => $row->logged_at,
+			);
+		}
+
+		return $items;
+	}
+
+	protected function format_websites($rows)
+	{
+		$items = array();
+
+		foreach ($rows as $row)
+		{
+			$items[] = array(
+				'domain' => $row->domain,
+				'status' => $row->status,
+				'http_status' => $row->http_status,
+				'response_time_ms' => $row->response_time_ms,
+				'ssl_expired_at' => $row->ssl_expired_at,
+				'ping_ms' => $row->ping_ms,
+				'dns_resolve_ms' => $row->dns_resolve_ms,
+				'last_check' => $row->last_check,
 			);
 		}
 

@@ -363,6 +363,7 @@ class Database extends MY_Controller
 		{
 			$this->finish_backup_history($history_id, 'failed', $result['message'], $relative, $remote_path, $file_name);
 			$this->Activity_model->log($this->current_user['id'], 'Database backup failed', $this->input->ip_address(), $config->server_id, 'failed', $result['message']);
+			$this->notify_backup_event($config->server_id, FALSE, $result['message'], $file_name, $history_id);
 			$this->session->set_flashdata('error', 'Backup gagal: '.html_escape($result['message']));
 			redirect('database');
 		}
@@ -372,6 +373,7 @@ class Database extends MY_Controller
 			$message = 'Download file backup dari VPS gagal: '.$this->remote_database->last_error();
 			$this->finish_backup_history($history_id, 'failed', $message, $relative, $result['remote_path'], $file_name);
 			$this->Activity_model->log($this->current_user['id'], 'Database backup download failed', $this->input->ip_address(), $config->server_id, 'failed', $message);
+			$this->notify_backup_event($config->server_id, FALSE, $message, $file_name, $history_id);
 			$this->session->set_flashdata('error', html_escape($message));
 			redirect('database');
 		}
@@ -380,6 +382,7 @@ class Database extends MY_Controller
 		$message = 'Backup berhasil: '.$file_name.' ('.$this->format_bytes($file_size).')';
 		$this->finish_backup_history($history_id, 'success', $message, $relative, $result['remote_path'], $file_name, $file_size);
 		$this->Activity_model->log($this->current_user['id'], $download ? 'Export SQL database' : 'Backup database', $this->input->ip_address(), $config->server_id, 'success', $message);
+		$this->notify_backup_event($config->server_id, TRUE, $message, $file_name, $history_id);
 
 		if ((int) $settings->auto_delete_old === 1)
 		{
@@ -394,6 +397,19 @@ class Database extends MY_Controller
 
 		$this->session->set_flashdata('success', $message);
 		redirect('database');
+	}
+
+	protected function notify_backup_event($server_id, $success, $message, $file_name, $event_id)
+	{
+		try
+		{
+			$this->load->library('Telegram_notifier');
+			$this->telegram_notifier->backup($server_id, $success, $message, $file_name, $event_id);
+		}
+		catch (Exception $e)
+		{
+			log_message('error', 'Telegram backup notification failed: '.$e->getMessage());
+		}
 	}
 
 	protected function finish_backup_history($id, $status, $output, $local_path, $remote_path, $file_name, $file_size = NULL)

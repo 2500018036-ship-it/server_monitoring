@@ -43,6 +43,11 @@ $system = isset($payload['system']) ? $payload['system'] : array();
 							</option>
 						<?php endforeach; ?>
 					</select>
+					<div id="sshConnectionIndicator" class="text-right mt-2" data-state="<?php echo $health_status === 'offline' ? 'lost' : 'connected'; ?>">
+						<span class="badge badge-<?php echo $health_status === 'offline' ? 'danger' : 'success'; ?>">
+							<i class="fas fa-plug mr-1"></i><?php echo $health_status === 'offline' ? 'Lost Connection' : 'Connected'; ?>
+						</span>
+					</div>
 				</div>
 			</div>
 		</div>

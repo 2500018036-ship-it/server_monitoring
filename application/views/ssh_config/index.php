@@ -32,7 +32,7 @@
 								<th>Auth</th>
 								<th>Status</th>
 								<th>Last Connected</th>
-								<th style="width: 170px;">Action</th>
+								<th style="width: 230px;">Action</th>
 							</tr>
 						</thead>
 						<tbody>
@@ -49,6 +49,9 @@
 									<td>
 										<?php echo form_open('ssh_config/test/'.$config->id, array('class' => 'd-inline')); ?>
 											<button class="btn btn-sm btn-success" title="Test"><i class="fas fa-plug"></i></button>
+										<?php echo form_close(); ?>
+										<?php echo form_open('ssh-config/install-agent/'.$config->id, array('class' => 'd-inline confirm-form', 'data-confirm' => 'Install atau repair realtime agent di VPS ini?')); ?>
+											<button class="btn btn-sm btn-warning" title="Install/Repair Agent"><i class="fas fa-satellite-dish"></i></button>
 										<?php echo form_close(); ?>
 										<button class="btn btn-sm btn-info" data-toggle="modal" data-target="#modalEditSsh<?php echo (int) $config->id; ?>" title="Edit"><i class="fas fa-edit"></i></button>
 										<?php echo form_open('ssh_config/delete/'.$config->id, array('class' => 'd-inline confirm-form', 'data-confirm' => 'Delete SSH config ini?')); ?>

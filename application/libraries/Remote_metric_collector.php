@@ -83,6 +83,9 @@ import urllib.error
 import urllib.request
 
 SERVICES = ["nginx", "apache2", "httpd", "php-fpm", "mysql", "mariadb", "docker", "ssh", "sshd", "cron", "crond"]
+DOCKER_AVAILABLE = None
+DOCKER_ROWS = None
+PROCESS_ROWS = None
 
 
 def now_string():
@@ -191,11 +194,14 @@ def cpu_model():
 	return platform.processor()
 
 
-def top_processes(sort_key):
-	sort_arg = "-%mem" if sort_key == "memory" else "-%cpu"
-	output = command(["ps", "-eo", "pid,user,comm,%cpu,%mem,etimes", "--sort=" + sort_arg], timeout=4)
+def process_rows():
+	global PROCESS_ROWS
+	if PROCESS_ROWS is not None:
+		return PROCESS_ROWS
+
+	output = command(["ps", "-eo", "pid,user,comm,%cpu,%mem,etimes"], timeout=4)
 	items = []
-	for line in output.splitlines()[1:21]:
+	for line in output.splitlines()[1:]:
 		parts = line.split(None, 5)
 		if len(parts) < 6:
 			continue
@@ -207,7 +213,13 @@ def top_processes(sort_key):
 			"ram": float(parts[4]) if parts[4].replace(".", "", 1).isdigit() else 0,
 			"running_time": parts[5] + "s",
 		})
-	return items
+	PROCESS_ROWS = items
+	return PROCESS_ROWS
+
+
+def top_processes(sort_key):
+	key = "ram" if sort_key == "memory" else "cpu"
+	return sorted(process_rows(), key=lambda item: item.get(key) or 0, reverse=True)[:20]
 
 
 def memory_payload():
@@ -287,14 +299,27 @@ def network_payload():
 
 def service_payload():
 	items = []
-	for service in SERVICES:
-		status = command(["systemctl", "is-active", service], timeout=2)
-		if not status:
+	if not shutil.which("systemctl"):
+		return items
+
+	output = command(["systemctl", "list-units", "--type=service", "--all", "--no-legend", "--no-pager"], timeout=5)
+	if not output:
+		return items
+
+	wanted = set(SERVICES)
+	for line in output.splitlines():
+		parts = line.split(None, 4)
+		if len(parts) < 4:
 			continue
+		unit = parts[0].replace(".service", "")
+		if unit not in wanted:
+			continue
+		active_state = parts[2]
+		sub_state = parts[3]
 		items.append({
-			"name": service,
-			"status": "running" if status == "active" else "stopped",
-			"log_excerpt": "",
+			"name": unit,
+			"status": "running" if active_state == "active" else "stopped",
+			"log_excerpt": sub_state,
 		})
 	return items
 
@@ -320,12 +345,19 @@ def docker_payload():
 
 
 def docker_available():
-	return bool(command(["which", "docker"]))
+	global DOCKER_AVAILABLE
+	if DOCKER_AVAILABLE is None:
+		DOCKER_AVAILABLE = shutil.which("docker") is not None
+	return DOCKER_AVAILABLE
 
 
 def docker_rows():
+	global DOCKER_ROWS
 	if not docker_available():
 		return []
+	if DOCKER_ROWS is not None:
+		return DOCKER_ROWS
+
 	output = command(["docker", "ps", "-a", "--format", "{{json .}}"], timeout=5)
 	rows = []
 	for line in output.splitlines():
@@ -333,7 +365,8 @@ def docker_rows():
 			rows.append(json.loads(line))
 		except Exception:
 			continue
-	return rows
+	DOCKER_ROWS = rows
+	return DOCKER_ROWS
 
 
 def parse_docker_ports(raw):
@@ -562,17 +595,17 @@ def docker_mysql_stats(raw, engine):
 		"WHERE table_schema NOT IN ('information_schema','mysql','performance_schema','sys');"
 	)
 	running_query = "SHOW GLOBAL STATUS LIKE 'Threads_running';"
-	size_output = docker_mysql_command(container, ["mysql", "-u" + user, "-N", "-e", size_query], user, password)
-	running_output = docker_mysql_command(container, ["mysql", "-u" + user, "-N", "-e", running_query], user, password)
+	stats_output = docker_mysql_command(container, ["mysql", "-u" + user, "-N", "-e", size_query + " " + running_query], user, password)
+	stats_lines = [line.strip() for line in stats_output.splitlines() if line.strip()]
 	status_text = raw.get("Status") or ""
 
 	return {
 		"engine": engine,
 		"status": "online" if status_text.lower().startswith("up") else "offline",
 		"connection_status": "Docker container " + container + ": " + status_text,
-		"database_size_mb": parse_first_number(size_output),
+		"database_size_mb": parse_first_number(stats_lines[0]) if stats_lines else None,
 		"slow_queries": parse_status_number(status, "Slow queries:"),
-		"running_queries": parse_status_value(running_output, "Threads_running"),
+		"running_queries": parse_status_value(stats_output, "Threads_running"),
 		"threads": parse_status_number(status, "Threads:"),
 		"uptime_seconds": parse_status_number(status, "Uptime:"),
 		"last_backup": None,
@@ -580,7 +613,7 @@ def docker_mysql_stats(raw, engine):
 
 
 def database_payload():
-	if command(["which", "mysqladmin"]):
+	if shutil.which("mysqladmin"):
 		ping = command(["mysqladmin", "ping"], timeout=3)
 		status = command(["mysqladmin", "status"], timeout=3)
 		if ping or status:
@@ -596,7 +629,7 @@ def database_payload():
 				"last_backup": None,
 			}
 
-	if command(["which", "pg_isready"]):
+	if shutil.which("pg_isready"):
 		status = command(["pg_isready"], timeout=3)
 		if status:
 			return {
@@ -769,18 +802,28 @@ hostname = socket.gethostname()
 load = os.getloadavg() if hasattr(os, "getloadavg") else (0, 0, 0)
 region = azure_metadata("/compute/location")
 public_ip = get_url("https://api.ipify.org", timeout=2)
+private_ip_value = private_ip()
+current_time = now_string()
 system = {
 	"hostname": hostname,
 	"operating_system": platform.platform(),
 	"kernel": platform.release(),
 	"architecture": platform.machine(),
 	"boot_time": "",
-	"current_user": command(["whoami"]),
+	"current_user": os.environ.get("USER") or os.environ.get("USERNAME") or command(["whoami"]),
 	"running_process": len(os.listdir("/proc")) if os.path.exists("/proc") else 0,
 	"zombie_process": 0,
 	"total_thread": 0,
 	"uptime_seconds": uptime_seconds(),
 }
+memory = memory_payload()
+storage = storage_payload()
+network = network_payload()
+services = service_payload()
+docker = docker_payload()
+database = database_payload()
+websites = website_payload()
+logs = log_payload()
 cpu = {
 	"usage_percent": cpu_usage(),
 	"cores": os.cpu_count(),
@@ -794,7 +837,7 @@ cpu = {
 
 payload = {
 	"agent_id": "ssh-" + hostname,
-	"metric_time": now_string(),
+	"metric_time": current_time,
 	"response_time_ms": 0,
 	"latency_ms": 0,
 	"server": {
@@ -802,30 +845,30 @@ payload = {
 		"server_name": hostname,
 		"hostname": hostname,
 		"public_ip": public_ip,
-		"private_ip": private_ip(),
+		"private_ip": private_ip_value,
 		"provider": "Azure" if region else "SSH Pull",
 		"operating_system": system["operating_system"],
 		"kernel": system["kernel"],
 		"architecture": system["architecture"],
 		"uptime_seconds": system["uptime_seconds"],
-		"current_time": now_string(),
+		"current_time": current_time,
 		"timezone": time.tzname[0] if time.tzname else "UTC",
 		"azure_region": region,
 	},
 	"system": system,
 	"cpu": cpu,
-	"memory": memory_payload(),
-	"storage": storage_payload(),
-	"network": network_payload(),
+	"memory": memory,
+	"storage": storage,
+	"network": network,
 	"processes": {
 		"top_cpu": cpu["top_processes"],
-		"top_memory": top_processes("memory"),
+		"top_memory": memory["top_processes"],
 	},
-	"services": service_payload(),
-	"docker": docker_payload(),
-	"database": database_payload(),
-	"websites": website_payload(),
-	"logs": log_payload(),
+	"services": services,
+	"docker": docker,
+	"database": database,
+	"websites": websites,
+	"logs": logs,
 }
 
 print(json.dumps(payload))

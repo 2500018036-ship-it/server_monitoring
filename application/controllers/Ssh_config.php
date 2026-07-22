@@ -48,12 +48,14 @@ class Ssh_config extends MY_Controller
 		$this->require_post();
 		$id = (int) $id;
 
-		if ( ! $this->Ssh_config_model->find($id))
+		$config = $this->Ssh_config_model->find($id, TRUE);
+
+		if ( ! $config)
 		{
 			show_404();
 		}
 
-		$this->validate_form(FALSE);
+		$this->validate_form(FALSE, $config);
 
 		if ($this->form_validation->run() === FALSE)
 		{
@@ -113,7 +115,58 @@ class Ssh_config extends MY_Controller
 		redirect('ssh-config');
 	}
 
-	protected function validate_form($is_create)
+	public function install_agent($id)
+	{
+		$this->require_post();
+		$this->Monitoring_model->sync_ssh_config_servers();
+
+		$config = $this->Ssh_config_model->find((int) $id, TRUE);
+
+		if ( ! $config)
+		{
+			show_404();
+		}
+
+		if ($config->status !== 'active')
+		{
+			$this->session->set_flashdata('error', 'SSH Config tidak aktif. Aktifkan dulu sebelum install realtime agent.');
+			redirect('ssh-config');
+		}
+
+		$this->load->library('Remote_agent_provisioner');
+		$result = $this->remote_agent_provisioner->install($config);
+		$status = $result['ok'] ? 'success' : 'failed';
+		$details = $this->activity_details($result);
+
+		$this->Activity_model->log(
+			$this->current_user['id'],
+			'Install/Repair Realtime Agent: '.$config->name,
+			$this->input->ip_address(),
+			$config->server_id,
+			$status,
+			$details
+		);
+
+		if ($result['ok'])
+		{
+			$this->Ssh_config_model->touch_connected($config->id);
+			$this->session->set_flashdata(
+				'success',
+				html_escape($result['message']).'<br><small>Endpoint: '.html_escape($result['metrics_url']).'</small>'
+			);
+		}
+		else
+		{
+			$this->session->set_flashdata(
+				'error',
+				html_escape($result['message']).'<br><small>Endpoint: '.html_escape($result['metrics_url']).'</small>'
+			);
+		}
+
+		redirect('ssh-config');
+	}
+
+	protected function validate_form($is_create, $config = NULL)
 	{
 		$this->form_validation->set_rules('name', 'Name', 'required|trim|min_length[3]');
 		$this->form_validation->set_rules('host', 'Host', 'required|trim');
@@ -130,6 +183,21 @@ class Ssh_config extends MY_Controller
 		if ($is_create && $this->input->post('auth_type') === 'private_key')
 		{
 			$this->form_validation->set_rules('private_key', 'Private Key', 'required');
+		}
+
+		if ( ! $is_create && $this->input->post('auth_type') === 'private_key')
+		{
+			$posted_key = trim((string) $this->input->post('private_key', FALSE));
+
+			if ($posted_key === '' && ( ! $config || empty($config->private_key)))
+			{
+				$this->form_validation->set_rules(
+					'private_key',
+					'Private Key',
+					'required',
+					array('required' => 'Private key lama tidak bisa dibaca. Paste dan simpan ulang private key.')
+				);
+			}
 		}
 	}
 
@@ -148,5 +216,32 @@ class Ssh_config extends MY_Controller
 			'status' => $this->input->post('status', TRUE),
 			'created_by' => $this->current_user['id'],
 		);
+	}
+
+	protected function activity_details($result)
+	{
+		$details = 'Endpoint: '.(isset($result['metrics_url']) ? $result['metrics_url'] : '-');
+
+		if (isset($result['agent_id']))
+		{
+			$details .= "\nAgent ID: ".$result['agent_id'];
+		}
+
+		if (isset($result['server_name']))
+		{
+			$details .= "\nServer: ".$result['server_name'];
+		}
+
+		if (isset($result['output']) && trim((string) $result['output']) !== '')
+		{
+			$details .= "\n\n".$result['output'];
+		}
+
+		if (strlen($details) > 8000)
+		{
+			$details = substr($details, 0, 8000)."\n...[truncated]";
+		}
+
+		return $details;
 	}
 }

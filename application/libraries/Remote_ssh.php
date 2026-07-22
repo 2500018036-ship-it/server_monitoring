@@ -1,9 +1,7 @@
 <?php
 defined('BASEPATH') OR exit('No direct script access allowed');
 
-use phpseclib3\Crypt\PublicKeyLoader;
 use phpseclib3\Net\SFTP;
-use phpseclib3\Net\SSH2;
 
 class Remote_ssh
 {
@@ -13,11 +11,12 @@ class Remote_ssh
 	public function __construct()
 	{
 		$this->CI =& get_instance();
+		$this->CI->load->library('Ssh_connection_manager');
 	}
 
 	public function available()
 	{
-		return class_exists('phpseclib3\\Net\\SSH2') && class_exists('phpseclib3\\Net\\SFTP');
+		return $this->CI->ssh_connection_manager->available();
 	}
 
 	public function last_error()
@@ -27,24 +26,16 @@ class Remote_ssh
 
 	public function test($config)
 	{
-		$ssh = $this->connect_ssh($config);
+		$result = $this->execute($config, 'printf "connected:%s" "$(hostname)"', 10);
 
-		if ( ! $ssh)
+		if ( ! $result['ok'])
 		{
-			return array('ok' => FALSE, 'output' => $this->last_error, 'exit_status' => 1);
+			return $result;
 		}
 
-		try
-		{
-			$output = trim($ssh->exec('printf "connected:%s" "$(hostname)"'));
-		}
-		catch (Exception $e)
-		{
-			$this->last_error = $this->friendly_error($e->getMessage());
-			return array('ok' => FALSE, 'output' => $this->last_error, 'exit_status' => 1);
-		}
+		$result['output'] = trim($result['output']);
 
-		return array('ok' => TRUE, 'output' => $output, 'exit_status' => 0);
+		return $result;
 	}
 
 	public function execute($config, $command, $timeout = 30)
@@ -57,11 +48,50 @@ class Remote_ssh
 		}
 
 		$started = microtime(TRUE);
+		$result = $this->exec_on_connection($ssh, $command, $started);
 
+		if ( ! $result['ok'] && ! empty($result['connection_error']))
+		{
+			$ssh = $this->connect_ssh($config, $timeout, TRUE);
+
+			if ( ! $ssh)
+			{
+				return array(
+					'ok' => FALSE,
+					'output' => $this->last_error,
+					'exit_status' => 1,
+					'duration_ms' => (int) ((microtime(TRUE) - $started) * 1000),
+				);
+			}
+
+			$result = $this->exec_on_connection($ssh, $command, $started);
+			$result['reconnected'] = TRUE;
+		}
+
+		unset($result['connection_error']);
+
+		return $result;
+	}
+
+	protected function exec_on_connection($ssh, $command, $started)
+	{
 		try
 		{
 			$output = $ssh->exec($command);
 			$exit_status = $ssh->getExitStatus();
+
+			if ($output === FALSE)
+			{
+				$this->last_error = 'SSH command failed because the connection was closed.';
+
+				return array(
+					'ok' => FALSE,
+					'output' => $this->last_error,
+					'exit_status' => 1,
+					'duration_ms' => (int) ((microtime(TRUE) - $started) * 1000),
+					'connection_error' => TRUE,
+				);
+			}
 		}
 		catch (Exception $e)
 		{
@@ -72,6 +102,7 @@ class Remote_ssh
 				'output' => $this->last_error,
 				'exit_status' => 1,
 				'duration_ms' => (int) ((microtime(TRUE) - $started) * 1000),
+				'connection_error' => TRUE,
 			);
 		}
 
@@ -85,24 +116,11 @@ class Remote_ssh
 
 	public function sftp($config)
 	{
-		if ( ! $this->available())
-		{
-			$this->last_error = 'phpseclib is not installed.';
-			return FALSE;
-		}
+		$sftp = $this->CI->ssh_connection_manager->sftp($config, 10);
 
-		try
+		if ( ! $sftp)
 		{
-			$sftp = new SFTP($config->host, (int) $config->port, 10);
-
-			if ( ! $this->login($sftp, $config))
-			{
-				return FALSE;
-			}
-		}
-		catch (Exception $e)
-		{
-			$this->last_error = $this->friendly_error($e->getMessage());
+			$this->last_error = $this->CI->ssh_connection_manager->last_error();
 			return FALSE;
 		}
 
@@ -296,89 +314,17 @@ class Remote_ssh
 		return array('ok' => (bool) $ok, 'message' => $ok ? 'Uploaded.' : 'Unable to upload file.');
 	}
 
-	protected function connect_ssh($config, $timeout = 10)
+	protected function connect_ssh($config, $timeout = 10, $force_reconnect = FALSE)
 	{
-		if ( ! $this->available())
-		{
-			$this->last_error = 'phpseclib is not installed.';
-			return FALSE;
-		}
+		$ssh = $this->CI->ssh_connection_manager->ssh($config, $timeout, $force_reconnect);
 
-		try
+		if ( ! $ssh)
 		{
-			$ssh = new SSH2($config->host, (int) $config->port, $timeout);
-			$ssh->setTimeout($timeout);
-
-			if ( ! $this->login($ssh, $config))
-			{
-				return FALSE;
-			}
-		}
-		catch (Exception $e)
-		{
-			$this->last_error = $this->friendly_error($e->getMessage());
+			$this->last_error = $this->CI->ssh_connection_manager->last_error();
 			return FALSE;
 		}
 
 		return $ssh;
-	}
-
-	protected function login($client, $config)
-	{
-		if ($config->auth_type === 'private_key')
-		{
-			if (empty($config->private_key))
-			{
-				$this->last_error = 'Private key is empty.';
-				return FALSE;
-			}
-
-			try
-			{
-				$key = PublicKeyLoader::load($config->private_key, $config->passphrase ?: FALSE);
-			}
-			catch (Exception $e)
-			{
-				$this->last_error = 'Private key could not be loaded.';
-				return FALSE;
-			}
-
-			try
-			{
-				$logged_in = $client->login($config->username, $key);
-			}
-			catch (Exception $e)
-			{
-				$this->last_error = $this->friendly_error($e->getMessage());
-				return FALSE;
-			}
-
-			if ($logged_in)
-			{
-				return TRUE;
-			}
-		}
-		else
-		{
-			try
-			{
-				$logged_in = $client->login($config->username, (string) $config->password);
-			}
-			catch (Exception $e)
-			{
-				$this->last_error = $this->friendly_error($e->getMessage());
-				return FALSE;
-			}
-
-			if ($logged_in)
-			{
-				return TRUE;
-			}
-		}
-
-		$this->last_error = 'SSH authentication failed.';
-
-		return FALSE;
 	}
 
 	protected function friendly_error($message)

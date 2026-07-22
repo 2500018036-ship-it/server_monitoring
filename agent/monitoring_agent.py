@@ -22,7 +22,7 @@ API_URL = os.environ.get("SM_API_URL", "https://example.com/index.php/api/metric
 API_KEY = os.environ.get("SM_API_KEY", "change-me")
 AGENT_ID = os.environ.get("SM_AGENT_ID", socket.gethostname())
 SERVER_NAME = os.environ.get("SM_SERVER_NAME", socket.gethostname())
-INTERVAL = int(os.environ.get("SM_INTERVAL", "3"))
+INTERVAL = int(os.environ.get("SM_INTERVAL", "1"))
 VERIFY_TLS = os.environ.get("SM_VERIFY_TLS", "1") == "1"
 WEBSITES = [item.strip() for item in os.environ.get("SM_WEBSITES", "").split(",") if item.strip()]
 SERVICES = [item.strip() for item in os.environ.get("SM_SERVICES", "nginx,apache2,httpd,php-fpm,mysql,mariadb,docker,ssh,sshd,cron,crond").split(",") if item.strip()]
@@ -686,7 +686,7 @@ def main():
 			print(now_string(), "http error", error.code, error.read().decode("utf-8", "ignore"), flush=True)
 		except Exception as error:
 			print(now_string(), "agent error", str(error), flush=True)
-		time.sleep(max(INTERVAL, 3))
+		time.sleep(max(INTERVAL, 1))
 
 
 if __name__ == "__main__":

@@ -3,15 +3,50 @@ defined('BASEPATH') OR exit('No direct script access allowed');
 
 class Monitoring_model extends CI_Model
 {
-	const OFFLINE_AFTER_SECONDS = 60;
+	const OFFLINE_AFTER_SECONDS = 180;
 
 	public function mark_stale_servers_offline()
 	{
-		return $this->db
+		$threshold = date('Y-m-d H:i:s', time() - self::OFFLINE_AFTER_SECONDS);
+		$servers = $this->db
+			->select('id, server_name, hostname')
+			->from('servers')
 			->where('last_heartbeat_at IS NOT NULL', NULL, FALSE)
-			->where('last_heartbeat_at <', date('Y-m-d H:i:s', time() - self::OFFLINE_AFTER_SECONDS))
+			->where('last_heartbeat_at <', $threshold)
 			->where('monitoring_status', 'online')
+			->get()
+			->result();
+
+		if (empty($servers))
+		{
+			return TRUE;
+		}
+
+		$ids = array();
+
+		foreach ($servers as $server)
+		{
+			$ids[] = (int) $server->id;
+		}
+
+		$updated = $this->db
+			->where_in('id', $ids)
 			->update('servers', array('monitoring_status' => 'offline'));
+
+		if ($updated)
+		{
+			foreach ($servers as $server)
+			{
+				$this->dispatch_server_offline_notification((int) $server->id, 'Heartbeat tidak diterima dalam '.self::OFFLINE_AFTER_SECONDS.' detik.');
+			}
+		}
+
+		return $updated;
+	}
+
+	public function sync_ssh_config_servers()
+	{
+		return $this->ensure_ssh_config_servers();
 	}
 
 	public function get_servers()
@@ -147,6 +182,78 @@ class Monitoring_model extends CI_Model
 			));
 	}
 
+	public function mark_server_offline($server_id, $reason = 'SSH connection failed.', $source = 'status-engine')
+	{
+		$server_id = (int) $server_id;
+
+		if ( ! $server_id)
+		{
+			return FALSE;
+		}
+
+		$now = date('Y-m-d H:i:s');
+		$reason = trim((string) $reason);
+		$reason = $reason === '' ? 'SSH connection failed.' : $reason;
+
+		$this->db->trans_start();
+		$this->db
+			->where('id', $server_id)
+			->update('servers', array(
+				'monitoring_status' => 'offline',
+				'last_latency_ms' => NULL,
+				'last_response_time_ms' => NULL,
+				'updated_at' => $now,
+			));
+
+		$this->insert_status_log($server_id, 'error', $source, $reason, $now);
+		$this->db->trans_complete();
+
+		$status = $this->db->trans_status();
+
+		if ($status)
+		{
+			$this->dispatch_server_offline_notification($server_id, $reason);
+		}
+
+		return $status;
+	}
+
+	public function record_connection_failure($server_id, $reason = 'SSH connection failed.', $source = 'status-engine')
+	{
+		$server_id = (int) $server_id;
+
+		if ( ! $server_id)
+		{
+			return FALSE;
+		}
+
+		$now = date('Y-m-d H:i:s');
+		$reason = trim((string) $reason);
+		$reason = $reason === '' ? 'SSH connection failed.' : $reason;
+		$server = $this->db
+			->select('monitoring_status, last_heartbeat_at')
+			->from('servers')
+			->where('id', $server_id)
+			->get()
+			->row();
+		$last_heartbeat = $server && ! empty($server->last_heartbeat_at) ? strtotime($server->last_heartbeat_at) : FALSE;
+		$heartbeat_is_stale = ! $last_heartbeat || (time() - $last_heartbeat) >= self::OFFLINE_AFTER_SECONDS;
+
+		if ($heartbeat_is_stale || $this->is_auth_failure($reason))
+		{
+			return $this->mark_server_offline($server_id, $reason, $source);
+		}
+
+		$this->db->trans_start();
+		$this->insert_status_log($server_id, 'warning', $source, $reason, $now);
+		$this->db
+			->where('id', $server_id)
+			->update('servers', array('updated_at' => $now));
+		$this->db->trans_complete();
+
+		return $this->db->trans_status();
+	}
+
 	public function record_metrics($server_id, $payload, $ip_address = NULL)
 	{
 		$metric_time = $this->normalize_datetime($this->array_value($payload, 'metric_time')) ?: date('Y-m-d H:i:s');
@@ -180,7 +287,14 @@ class Monitoring_model extends CI_Model
 		$this->insert_system_logs($server_id, $metric_time, $this->array_value($payload, 'logs', array()));
 		$this->db->trans_complete();
 
-		return $this->db->trans_status();
+		$status = $this->db->trans_status();
+
+		if ($status)
+		{
+			$this->dispatch_monitoring_notifications($server_id, $payload, $metric_time);
+		}
+
+		return $status;
 	}
 
 	public function record_logs($server_id, $logs)
@@ -193,6 +307,49 @@ class Monitoring_model extends CI_Model
 		$this->insert_system_logs($server_id, date('Y-m-d H:i:s'), $logs);
 
 		return TRUE;
+	}
+
+	protected function dispatch_monitoring_notifications($server_id, $payload, $metric_time)
+	{
+		try
+		{
+			$this->load->library('Telegram_notifier');
+			$server = $this->db
+				->where('id', (int) $server_id)
+				->get('servers')
+				->row();
+			$this->telegram_notifier->monitoring((int) $server_id, $server, is_array($payload) ? $payload : array(), $metric_time);
+		}
+		catch (Exception $e)
+		{
+			log_message('error', 'Telegram monitoring notification failed: '.$e->getMessage());
+		}
+	}
+
+	protected function dispatch_server_offline_notification($server_id, $reason)
+	{
+		try
+		{
+			$this->load->library('Telegram_notifier');
+			$this->telegram_notifier->server_offline((int) $server_id, $reason);
+		}
+		catch (Exception $e)
+		{
+			log_message('error', 'Telegram offline notification failed: '.$e->getMessage());
+		}
+	}
+
+	protected function dispatch_ssh_failure_notification($server_id, $reason)
+	{
+		try
+		{
+			$this->load->library('Telegram_notifier');
+			$this->telegram_notifier->ssh_failure((int) $server_id, $reason);
+		}
+		catch (Exception $e)
+		{
+			log_message('error', 'Telegram SSH failure notification failed: '.$e->getMessage());
+		}
 	}
 
 	public function dashboard_payload($server_id = NULL)
@@ -252,7 +409,7 @@ class Monitoring_model extends CI_Model
 
 		$health = $this->server_health($server, $metric, $payload);
 		$server->health_status = $health['status'];
-		$server->health_label = ucfirst($health['status']);
+		$server->health_label = isset($health['label']) ? $health['label'] : ucfirst($health['status']);
 		$server->health_badge = $health['badge'];
 		$server->health_reason = $health['reason'];
 		$server->health_summary = $health['summary'];
@@ -497,11 +654,16 @@ class Monitoring_model extends CI_Model
 
 		if ( ! $server || $server->monitoring_status === 'offline' || $last_heartbeat === NULL || ($heartbeat_age !== NULL && $heartbeat_age > self::OFFLINE_AFTER_SECONDS))
 		{
+			$reason = $last_heartbeat === NULL
+				? 'Monitoring agent belum pernah mengirim heartbeat ke aplikasi ini.'
+				: 'Monitoring agent tidak mengirim data selama lebih dari '.self::OFFLINE_AFTER_SECONDS.' detik. VPS bisa saja tetap hidup, tetapi jalur realtime agent sedang putus.';
+
 			return array(
 				'status' => 'offline',
+				'label' => 'Agent Offline',
 				'badge' => 'danger',
-				'reason' => 'Server tidak dapat dihubungi atau heartbeat belum diterima dalam '.self::OFFLINE_AFTER_SECONDS.' detik.',
-				'summary' => 'Offline'.($last_heartbeat ? ' - Last Seen '.$this->last_seen_text($last_heartbeat) : ''),
+				'reason' => $reason,
+				'summary' => 'Agent Offline'.($last_heartbeat ? ' - Last Seen '.$this->last_seen_text($last_heartbeat) : ''),
 			);
 		}
 
@@ -519,20 +681,10 @@ class Monitoring_model extends CI_Model
 				$warnings[] = 'RAM '.round((float) $metric->memory_usage, 2).'%';
 			}
 
-			if ((float) $metric->disk_usage > 80)
+			if ((float) $metric->disk_usage > 90)
 			{
 				$warnings[] = 'Disk '.round((float) $metric->disk_usage, 2).'%';
 			}
-		}
-
-		if (isset($server->last_response_time_ms) && (int) $server->last_response_time_ms > 5000)
-		{
-			$warnings[] = 'Response time '.(int) $server->last_response_time_ms.' ms';
-		}
-
-		if (isset($server->last_latency_ms) && (int) $server->last_latency_ms > 2500)
-		{
-			$warnings[] = 'Latency '.(int) $server->last_latency_ms.' ms';
 		}
 
 		foreach ($this->array_value($payload, 'services', array()) as $service)
@@ -540,24 +692,9 @@ class Monitoring_model extends CI_Model
 			$name = strtolower((string) $this->array_value($service, 'name', ''));
 			$status = strtolower((string) $this->array_value($service, 'status', ''));
 
-			if ($status === 'stopped' || $status === 'offline' || $status === 'failed')
+			if ($this->is_important_service($name) && ($status === 'stopped' || $status === 'offline' || $status === 'failed'))
 			{
 				$warnings[] = 'Service '.($name ?: 'unknown').' '.$status;
-			}
-		}
-
-		foreach ($this->array_value($payload, 'websites', array()) as $website)
-		{
-			$status = strtolower((string) $this->array_value($website, 'status', ''));
-			$response = (int) $this->array_value($website, 'response_time_ms', 0);
-
-			if ($status === 'offline')
-			{
-				$warnings[] = 'Website '.$this->array_value($website, 'domain', 'unknown').' offline';
-			}
-			elseif ($response > 2000)
-			{
-				$warnings[] = 'Website lambat '.$response.' ms';
 			}
 		}
 
@@ -599,6 +736,14 @@ class Monitoring_model extends CI_Model
 		}
 
 		return substr($value, 0, 46);
+	}
+
+	protected function is_important_service($name)
+	{
+		$name = strtolower(trim((string) $name));
+		$important = array('nginx', 'apache2', 'httpd', 'php-fpm', 'mysql', 'mariadb', 'docker', 'ssh', 'sshd');
+
+		return in_array($name, $important, TRUE);
 	}
 
 	protected function ensure_ssh_config_servers()
@@ -1040,6 +1185,50 @@ class Monitoring_model extends CI_Model
 				'logged_at' => $this->normalize_datetime($this->array_value($log, 'logged_at')) ?: $metric_time,
 			));
 		}
+	}
+
+	protected function is_auth_failure($reason)
+	{
+		$reason = strtolower((string) $reason);
+		$auth_errors = array(
+			'auth',
+			'login failed',
+			'unable to login',
+			'private key is empty',
+			'private key tidak',
+			'password required',
+			'passphrase',
+			'permission denied',
+		);
+
+		foreach ($auth_errors as $error)
+		{
+			if (strpos($reason, $error) !== FALSE)
+			{
+				return TRUE;
+			}
+		}
+
+		return FALSE;
+	}
+
+	protected function insert_status_log($server_id, $level, $source, $message, $logged_at)
+	{
+		$message = trim((string) $message);
+
+		if ($message === '' || $this->system_log_exists($server_id, $source, $message))
+		{
+			return FALSE;
+		}
+
+		return $this->db->insert('system_logs', array(
+			'server_id' => (int) $server_id,
+			'log_type' => 'ssh',
+			'level' => $this->normalize_log_level($level),
+			'source' => $source,
+			'message' => $message,
+			'logged_at' => $logged_at,
+		));
 	}
 
 	protected function system_log_exists($server_id, $source, $message)

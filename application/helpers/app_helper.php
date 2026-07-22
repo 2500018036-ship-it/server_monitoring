@@ -80,7 +80,6 @@ if ( ! function_exists('sidebar_menus'))
 				),
 			),
 			array('label' => 'Logs', 'icon' => 'fas fa-clipboard-list', 'url' => 'logs', 'segment' => 'logs', 'roles' => $admin),
-			array('label' => 'Telegram', 'icon' => 'fab fa-telegram-plane', 'url' => 'telegram', 'segment' => 'telegram', 'roles' => $admin),
 			array('label' => 'AI Assistant', 'icon' => 'fas fa-robot', 'url' => 'ai', 'segment' => 'ai', 'roles' => $ops),
 			array('label' => 'SSH Config', 'icon' => 'fas fa-key', 'url' => 'ssh-config', 'segment' => 'ssh-config', 'roles' => $admin),
 			array('label' => 'Terminal', 'icon' => 'fas fa-terminal', 'url' => 'terminal', 'segment' => 'terminal', 'roles' => $admin),
@@ -93,7 +92,18 @@ if ( ! function_exists('sidebar_menus'))
 			array('label' => 'SSL Manager', 'icon' => 'fas fa-certificate', 'url' => 'ssl-manager', 'segment' => 'ssl-manager', 'roles' => $admin),
 			array('label' => 'System Manager', 'icon' => 'fas fa-tools', 'url' => 'system-manager', 'segment' => 'system-manager', 'roles' => $admin),
 			array('label' => 'Users', 'icon' => 'fas fa-users', 'url' => 'users', 'segment' => 'users', 'roles' => $admin),
-			array('label' => 'Settings', 'icon' => 'fas fa-cogs', 'url' => 'settings', 'segment' => 'settings', 'roles' => $admin),
+			array(
+				'label' => 'Settings',
+				'icon' => 'fas fa-cogs',
+				'url' => 'settings',
+				'segment' => 'settings',
+				'roles' => $admin,
+				'children' => array(
+					array('label' => 'General', 'icon' => 'far fa-circle', 'url' => 'settings', 'segment' => 'settings', 'roles' => $admin),
+					array('label' => 'Telegram Bot', 'icon' => 'fab fa-telegram-plane', 'url' => 'settings/telegram-bot', 'segment' => 'settings/telegram-bot', 'roles' => $admin),
+					array('label' => 'Notification Settings', 'icon' => 'fas fa-bell', 'url' => 'settings/notification-settings', 'segment' => 'settings/notification-settings', 'roles' => $admin),
+				),
+			),
 			array('label' => 'Profile', 'icon' => 'fas fa-user-circle', 'url' => 'profile', 'segment' => 'profile', 'roles' => $all),
 		);
 	}

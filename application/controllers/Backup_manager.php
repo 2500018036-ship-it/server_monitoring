@@ -42,8 +42,22 @@ class Backup_manager extends MY_Controller
 		$status = $result['ok'] ? 'success' : 'failed';
 		$this->Remote_history_model->backup($config->server_id, $config->id, $this->current_user['id'], $type, 'backup', $target, $status, $result['output']);
 		$this->Activity_model->log($this->current_user['id'], 'Backup '.$type, $this->input->ip_address(), $config->server_id, $status, $result['output']);
+		$this->notify_backup_event($config->server_id, (bool) $result['ok'], $result['output'], basename($target), $target);
 		$this->session->set_flashdata($result['ok'] ? 'success' : 'error', '<pre class="text-left mb-0">'.html_escape($result['output']).'</pre>');
 
 		redirect('backup-manager');
+	}
+
+	protected function notify_backup_event($server_id, $success, $message, $file_name, $event_id)
+	{
+		try
+		{
+			$this->load->library('Telegram_notifier');
+			$this->telegram_notifier->backup($server_id, $success, $message, $file_name, $event_id);
+		}
+		catch (Exception $e)
+		{
+			log_message('error', 'Telegram backup manager notification failed: '.$e->getMessage());
+		}
 	}
 }

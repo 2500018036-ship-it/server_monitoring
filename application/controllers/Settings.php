@@ -45,8 +45,6 @@ class Settings extends MY_Controller
 		$data = array(
 			'app_name' => $this->input->post('app_name', TRUE),
 			'timezone' => $this->input->post('timezone', TRUE),
-			'telegram_bot_token' => $this->input->post('telegram_bot_token', TRUE),
-			'telegram_chat_id' => $this->input->post('telegram_chat_id', TRUE),
 			'openai_api_key' => $this->input->post('openai_api_key', TRUE),
 			'gemini_api_key' => $this->input->post('gemini_api_key', TRUE),
 			'ollama_url' => $this->input->post('ollama_url', TRUE),

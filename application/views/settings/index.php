@@ -95,22 +95,6 @@ $timezones = array('Asia/Jakarta', 'Asia/Makassar', 'Asia/Jayapura', 'UTC', 'Asi
 					<div class="col-lg-6">
 						<div class="card">
 							<div class="card-header">
-								<h3 class="card-title"><i class="fab fa-telegram-plane mr-2"></i>Telegram</h3>
-							</div>
-							<div class="card-body">
-								<div class="form-group">
-									<label>Telegram Bot Token</label>
-									<input type="text" name="telegram_bot_token" class="form-control" value="<?php echo e($setting->telegram_bot_token); ?>">
-								</div>
-								<div class="form-group mb-0">
-									<label>Telegram Chat ID</label>
-									<input type="text" name="telegram_chat_id" class="form-control" value="<?php echo e($setting->telegram_chat_id); ?>">
-								</div>
-							</div>
-						</div>
-
-						<div class="card">
-							<div class="card-header">
 								<h3 class="card-title"><i class="fas fa-robot mr-2"></i>AI Provider</h3>
 							</div>
 							<div class="card-body">

@@ -14,6 +14,14 @@
 	var pullDisabledServers = {};
 	var lastPullAt = 0;
 	var lastPullServerId = '';
+	var reconnectRetryTimer = null;
+	var reconnectRetryDelay = 1500;
+	var pendingMonitoringServerId = null;
+	var monitoringRequestSeq = 0;
+	var activeMonitoringServerId = 0;
+	var realtimeStream = null;
+	var realtimeStreamServerId = 0;
+	var realtimeStreamEnabled = false;
 
 	function showFlashMessage() {
 		if (!window.SM_FLASH) {
@@ -244,6 +252,182 @@
 		return '<span class="badge badge-' + healthClass(status) + '">' + healthLabel(status) + '</span>';
 	}
 
+	function reconnectBadge(state) {
+		if (state === 'reconnecting') {
+			return {
+				label: 'Reconnecting',
+				className: 'warning',
+				icon: 'fas fa-sync-alt fa-spin'
+			};
+		}
+
+		if (state === 'lost') {
+			return {
+				label: 'Lost Connection',
+				className: 'danger',
+				icon: 'fas fa-unlink'
+			};
+		}
+
+		return {
+			label: 'Connected',
+			className: 'success',
+			icon: 'fas fa-plug'
+		};
+	}
+
+	function updateSshConnectionIndicator(state, message) {
+		var $indicator = $('#sshConnectionIndicator');
+
+		if (!$indicator.length) {
+			return;
+		}
+
+		var badge = reconnectBadge(state);
+		var html = '<span class="badge badge-' + badge.className + '">' +
+			'<i class="' + badge.icon + ' mr-1"></i>' + badge.label +
+			'</span>';
+
+		if (message && state !== 'connected') {
+			html += '<small class="text-muted ml-2">' + escapeHtml(String(message).slice(0, 120)) + '</small>';
+		}
+
+		$indicator.attr('data-state', state).html(html);
+	}
+
+	function currentReconnectState() {
+		return $('#sshConnectionIndicator').attr('data-state') || 'connected';
+	}
+
+	function clearReconnectRetry() {
+		if (reconnectRetryTimer) {
+			window.clearTimeout(reconnectRetryTimer);
+			reconnectRetryTimer = null;
+		}
+	}
+
+	function scheduleReconnectRetry(serverId, delay) {
+		clearReconnectRetry();
+		reconnectRetryTimer = window.setTimeout(function () {
+			var $dashboard = $('#realtimeDashboard');
+
+			if (!$dashboard.length) {
+				return;
+			}
+
+			setActiveMonitoringServer(serverId);
+
+			refreshRealtimeDashboard();
+		}, delay || reconnectRetryDelay);
+	}
+
+	function setActiveMonitoringServer(serverId) {
+		activeMonitoringServerId = Number(serverId || 0);
+		$('#realtimeDashboard').attr('data-server-id', activeMonitoringServerId || 0);
+
+		if ($('#serverSelector').length) {
+			$('#serverSelector').val(activeMonitoringServerId || '');
+		}
+	}
+
+	function currentDashboardServerId() {
+		var $dashboard = $('#realtimeDashboard');
+
+		return Number(activeMonitoringServerId || $('#serverSelector').val() || $dashboard.attr('data-server-id') || 0);
+	}
+
+	function isStaleMonitoringResponse(requestServerId) {
+		var currentServerId = currentDashboardServerId();
+
+		return requestServerId && currentServerId && Number(requestServerId) !== Number(currentServerId);
+	}
+
+	function runPendingMonitoringSwitch(requestServerId) {
+		if (pendingMonitoringServerId === null || Number(pendingMonitoringServerId) === Number(requestServerId)) {
+			pendingMonitoringServerId = null;
+			return;
+		}
+
+		var nextServerId = pendingMonitoringServerId;
+		pendingMonitoringServerId = null;
+		setActiveMonitoringServer(nextServerId);
+		refreshRealtimeDashboard();
+	}
+
+	function switchRealtimeServer(serverId) {
+		serverId = Number(serverId || 0);
+		pendingMonitoringServerId = serverId;
+		clearReconnectRetry();
+		updateSshConnectionIndicator('reconnecting', 'Menunggu data agent realtime...');
+		setActiveMonitoringServer(serverId);
+
+		if (!startRealtimeStream()) {
+			refreshRealtimeDashboard();
+		}
+	}
+
+	function stopRealtimeStream() {
+		if (realtimeStream) {
+			realtimeStream.close();
+			realtimeStream = null;
+		}
+
+		realtimeStreamServerId = 0;
+	}
+
+	function startRealtimeStream() {
+		if (!window.EventSource || !$('#realtimeDashboard').length) {
+			realtimeStreamEnabled = false;
+			return false;
+		}
+
+		var serverId = currentDashboardServerId();
+
+		if (!serverId) {
+			realtimeStreamEnabled = false;
+			return false;
+		}
+
+		stopRealtimeStream();
+		realtimeStreamEnabled = true;
+		realtimeStreamServerId = serverId;
+		updateSshConnectionIndicator('reconnecting', 'Menunggu data agent realtime...');
+
+		realtimeStream = new window.EventSource(apiUrl('api/stream', { server_id: serverId }));
+
+		realtimeStream.addEventListener('monitoring', function (event) {
+			var response;
+
+			if (Number(realtimeStreamServerId || 0) !== Number(currentDashboardServerId() || 0)) {
+				return;
+			}
+
+			try {
+				response = JSON.parse(event.data);
+			} catch (error) {
+				updateSshConnectionIndicator('reconnecting', 'Response stream tidak valid.');
+				return;
+			}
+
+			if (response && response.selected_server_id && serverId && Number(response.selected_server_id) !== Number(serverId)) {
+				return;
+			}
+
+			if (response && response.ok) {
+				updateDashboard(response);
+				updateMonitoringConnectionState(response, serverId);
+			}
+		});
+
+		realtimeStream.onerror = function () {
+			if (Number(realtimeStreamServerId || 0) === Number(currentDashboardServerId() || 0)) {
+				updateSshConnectionIndicator('reconnecting', 'Mencoba reconnect stream agent...');
+			}
+		};
+
+		return true;
+	}
+
 	function serverSummary(server) {
 		server = server || {};
 
@@ -262,9 +446,41 @@
 				return (row.metric_time || '').slice(11, 19);
 			}),
 			values: rows.map(function (row) {
-				return Number(row[field] || 0);
+				var value = Number(row[field]);
+				return Number.isFinite(value) ? value : 0;
 			})
 		};
+	}
+
+	function replaceArray(target, source) {
+		target.splice(0, target.length);
+		Array.prototype.push.apply(target, source || []);
+	}
+
+	function firstLabels() {
+		for (var index = 0; index < arguments.length; index++) {
+			if (arguments[index] && arguments[index].length) {
+				return arguments[index];
+			}
+		}
+
+		return [];
+	}
+
+	function updateLineChart(chart, labels, datasetValues) {
+		if (!chart) {
+			return;
+		}
+
+		replaceArray(chart.data.labels, labels);
+
+		datasetValues.forEach(function (values, index) {
+			if (chart.data.datasets[index]) {
+				replaceArray(chart.data.datasets[index].data, values);
+			}
+		});
+
+		chart.update();
 	}
 
 	function createLineChart(canvasId, datasets, max) {
@@ -283,7 +499,10 @@
 			options: {
 				responsive: true,
 				maintainAspectRatio: false,
-				animation: false,
+				animation: {
+					duration: 350,
+					easing: 'easeOutQuart'
+				},
 				plugins: {
 					legend: {
 						position: 'bottom'
@@ -300,16 +519,20 @@
 	}
 
 	function initRealtimeCharts() {
-		charts.resource = createLineChart('resourceRealtimeChart', [
-			{ label: 'CPU', data: [], borderColor: '#007bff', backgroundColor: 'rgba(0,123,255,.1)', tension: .35 },
-			{ label: 'RAM', data: [], borderColor: '#20c997', backgroundColor: 'rgba(32,201,151,.1)', tension: .35 },
-			{ label: 'Disk', data: [], borderColor: '#6610f2', backgroundColor: 'rgba(102,16,242,.1)', tension: .35 }
-		], 100);
+		if (!charts.resource) {
+			charts.resource = createLineChart('resourceRealtimeChart', [
+				{ label: 'CPU', data: [], borderColor: '#007bff', backgroundColor: 'rgba(0,123,255,.1)', tension: .35 },
+				{ label: 'RAM', data: [], borderColor: '#20c997', backgroundColor: 'rgba(32,201,151,.1)', tension: .35 },
+				{ label: 'Disk', data: [], borderColor: '#6610f2', backgroundColor: 'rgba(102,16,242,.1)', tension: .35 }
+			], 100);
+		}
 
-		charts.network = createLineChart('networkRealtimeChart', [
-			{ label: 'Upload B/s', data: [], borderColor: '#fd7e14', backgroundColor: 'rgba(253,126,20,.1)', tension: .35 },
-			{ label: 'Download B/s', data: [], borderColor: '#17a2b8', backgroundColor: 'rgba(23,162,184,.1)', tension: .35 }
-		]);
+		if (!charts.network) {
+			charts.network = createLineChart('networkRealtimeChart', [
+				{ label: 'Upload B/s', data: [], borderColor: '#fd7e14', backgroundColor: 'rgba(253,126,20,.1)', tension: .35 },
+				{ label: 'Download B/s', data: [], borderColor: '#17a2b8', backgroundColor: 'rgba(23,162,184,.1)', tension: .35 }
+			]);
+		}
 	}
 
 	function updateCharts(data) {
@@ -323,20 +546,15 @@
 		var upload = chartData(data.charts.network_upload, 'upload_speed');
 		var download = chartData(data.charts.network_download, 'download_speed');
 
-		if (charts.resource) {
-			charts.resource.data.labels = cpu.labels;
-			charts.resource.data.datasets[0].data = cpu.values;
-			charts.resource.data.datasets[1].data = memory.values;
-			charts.resource.data.datasets[2].data = storage.values;
-			charts.resource.update();
-		}
-
-		if (charts.network) {
-			charts.network.data.labels = upload.labels.length ? upload.labels : download.labels;
-			charts.network.data.datasets[0].data = upload.values;
-			charts.network.data.datasets[1].data = download.values;
-			charts.network.update();
-		}
+		updateLineChart(charts.resource, firstLabels(cpu.labels, memory.labels, storage.labels), [
+			cpu.values,
+			memory.values,
+			storage.values
+		]);
+		updateLineChart(charts.network, firstLabels(upload.labels, download.labels), [
+			upload.values,
+			download.values
+		]);
 	}
 
 	function setServerSelector(servers, selectedId) {
@@ -480,24 +698,37 @@
 
 	function updateTables(data) {
 		var payload = data.payload || {};
-		var cpuProcesses = ((payload.processes || {}).top_cpu || (payload.cpu || {}).top_processes || []);
-		var memoryProcesses = ((payload.processes || {}).top_memory || (payload.memory || {}).top_processes || []);
+		var databaseRows = data.database || [];
+		var payloadCpuProcesses = ((payload.processes || {}).top_cpu || (payload.cpu || {}).top_processes || []);
+		var payloadMemoryProcesses = ((payload.processes || {}).top_memory || (payload.memory || {}).top_processes || []);
+		var payloadServices = payload.services || [];
+		var payloadDockerContainers = ((payload.docker || {}).containers || []);
+		var payloadWebsites = payload.websites || [];
+		var payloadLogs = payload.logs || [];
+		var latestDatabase = hasObjectKeys(payload.database) ? payload.database : (databaseRows[0] || {});
+		var cpuProcesses = payloadCpuProcesses.length ? payloadCpuProcesses : (data.process_cpu || []);
+		var memoryProcesses = payloadMemoryProcesses.length ? payloadMemoryProcesses : (data.process_memory || []);
+		var services = payloadServices.length ? payloadServices : (data.services || []);
+		var dockerContainers = payloadDockerContainers.length ? payloadDockerContainers : (data.docker || []);
+		var websites = payloadWebsites.length ? payloadWebsites : (data.websites || []);
+		var logs = payloadLogs.length ? payloadLogs : (data.logs || []);
 
 		fillRows('#topCpuProcessRows', cpuProcesses, 6, processRow);
 		fillRows('#topMemoryProcessRows', memoryProcesses, 6, processRow);
-		fillRows('#serviceRows', payload.services || [], 4, function (row) {
-			return '<tr><td>' + escapeHtml(row.name) + '</td><td>' + badge(row.status) + '</td><td>' + escapeHtml(row.logged_at || data.metric_time || '-') + '</td><td>' + escapeHtml(row.log_excerpt || '-') + '</td></tr>';
+		fillRows('#serviceRows', services, 4, function (row) {
+			return '<tr><td>' + escapeHtml(row.name || row.service_name || '-') + '</td><td>' + badge(row.status) + '</td><td>' + escapeHtml(row.logged_at || data.metric_time || '-') + '</td><td>' + escapeHtml(row.log_excerpt || '-') + '</td></tr>';
 		});
-		fillRows('#dockerRows', ((payload.docker || {}).containers || []), 5, function (row) {
-			return '<tr><td>' + escapeHtml(row.container_name || row.container_id || '-') + '</td><td>' + escapeHtml(row.image || '-') + '</td><td>' + badge(row.status) + '</td><td>' + percent(row.cpu) + '</td><td>' + escapeHtml(row.ram || '-') + '</td></tr>';
+		fillRows('#dockerRows', dockerContainers, 5, function (row) {
+			var dockerCpu = row.cpu === undefined ? row.cpu_percent : row.cpu;
+			return '<tr><td>' + escapeHtml(row.container_name || row.name || row.container_id || '-') + '</td><td>' + escapeHtml(row.image || '-') + '</td><td>' + badge(row.status) + '</td><td>' + percent(dockerCpu) + '</td><td>' + escapeHtml(row.ram || row.ram_usage || '-') + '</td></tr>';
 		});
-		fillRows('#websiteRows', payload.websites || [], 5, function (row) {
+		fillRows('#websiteRows', websites, 5, function (row) {
 			return '<tr><td>' + escapeHtml(row.domain || '-') + '</td><td>' + badge(row.status) + '</td><td>' + escapeHtml(row.http_status || '-') + '</td><td>' + text(row.response_time_ms, ' ms') + '</td><td>' + escapeHtml(row.last_check || '-') + '</td></tr>';
 		});
-		fillRows('#databaseRows', hasObjectKeys(payload.database) ? [payload.database] : [], 5, function (row) {
+		fillRows('#databaseRows', hasObjectKeys(latestDatabase) ? [latestDatabase] : [], 5, function (row) {
 			return '<tr><td>' + escapeHtml(row.engine || '-') + '</td><td>' + badge(row.status) + '</td><td>' + text(row.database_size_mb, ' MB') + '</td><td>' + escapeHtml(row.threads || '-') + '</td><td>' + duration(row.uptime_seconds) + '</td></tr>';
 		});
-		fillRows('#logRows', payload.logs || [], 5, logRow);
+		fillRows('#logRows', logs, 5, logRow);
 	}
 
 	function processRow(row) {
@@ -535,10 +766,11 @@
 			return item.health_status === 'online' || item.health_status === 'warning';
 		}).length;
 		var healthStatus = server.health_status || server.status || 'offline';
+		var selectedServerId = activeMonitoringServerId || data.selected_server_id || server.id || 0;
 
-		setServerSelector(data.servers || [], data.selected_server_id);
-		updateNavbarServers(data.servers || [], data.selected_server_id, server);
-		$('#realtimeDashboard').attr('data-server-id', data.selected_server_id || 0);
+		setServerSelector(data.servers || [], selectedServerId);
+		updateNavbarServers(data.servers || [], selectedServerId, server);
+		$('#realtimeDashboard').attr('data-server-id', selectedServerId || 0);
 		$('#totalServers').text((data.servers || []).length);
 		$('#onlineServers').text(online);
 		$('#serverStatus').text(server.health_label || healthLabel(healthStatus));
@@ -589,6 +821,33 @@
 		updateTables(data);
 	}
 
+	function updateMonitoringConnectionState(response, serverId) {
+		if (!response) {
+			updateSshConnectionIndicator('lost', 'Monitoring response kosong.');
+			scheduleReconnectRetry(serverId);
+			return;
+		}
+
+		if (response.pull_ok === true) {
+			clearReconnectRetry();
+			updateSshConnectionIndicator('connected');
+			return;
+		}
+
+		if (response.pull_ok === false) {
+			updateSshConnectionIndicator('lost', response.pull_message || 'SSH connection lost.');
+
+			if (Number(response.pull_status) !== 404) {
+				scheduleReconnectRetry(response.selected_server_id || serverId);
+			}
+
+			return;
+		}
+
+		var status = (response.server && (response.server.health_status || response.server.status)) || 'offline';
+		updateSshConnectionIndicator(status === 'offline' ? 'lost' : 'connected', response.server ? response.server.health_reason : '');
+	}
+
 	function refreshRealtimeDashboard() {
 		var $dashboard = $('#realtimeDashboard');
 
@@ -596,16 +855,62 @@
 			return;
 		}
 
-		var serverId = Number($('#serverSelector').val() || $dashboard.attr('data-server-id') || 0);
+		var serverId = currentDashboardServerId();
 
-		pullSshMetrics(serverId).always(function () {
-			$.getJSON(apiUrl('api/server', { server_id: serverId }))
-				.done(function (response) {
-					if (response && response.ok) {
-						updateDashboard(response);
-					}
-				});
-		});
+		if (pullInFlight) {
+			if (String(serverId || '') !== String(lastPullServerId || '')) {
+				pendingMonitoringServerId = serverId;
+			}
+			return;
+		}
+
+		pendingMonitoringServerId = null;
+		pullInFlight = true;
+		lastPullAt = Date.now();
+		lastPullServerId = String(serverId || '');
+		var requestServerId = serverId;
+		var requestSeq = ++monitoringRequestSeq;
+
+		if (currentReconnectState() !== 'connected') {
+			updateSshConnectionIndicator('reconnecting', 'Membaca data agent realtime...');
+		}
+
+		$.getJSON(apiUrl('api/server', { server_id: serverId || '' }))
+			.done(function (response) {
+				if (requestSeq !== monitoringRequestSeq || isStaleMonitoringResponse(requestServerId)) {
+					return;
+				}
+
+				if (response && response.selected_server_id && requestServerId && Number(response.selected_server_id) !== Number(requestServerId)) {
+					updateSshConnectionIndicator('reconnecting', 'Menunggu response server yang dipilih...');
+					scheduleReconnectRetry(requestServerId);
+					return;
+				}
+
+				if (response && response.ok) {
+					updateDashboard(response);
+					updateMonitoringConnectionState(response, requestServerId);
+				} else {
+					updateSshConnectionIndicator('lost', response && response.message ? response.message : 'Monitoring response gagal.');
+				}
+			})
+			.fail(function (xhr) {
+				if (requestSeq !== monitoringRequestSeq || isStaleMonitoringResponse(requestServerId)) {
+					return;
+				}
+
+				var response = xhr.responseJSON || {};
+
+				updateSshConnectionIndicator('lost', response.message || 'Monitoring request gagal.');
+
+				if (response.message) {
+					updateAlerts([{ level: 'danger', message: response.message }]);
+				}
+			})
+			.always(function () {
+				pullInFlight = false;
+				runPendingMonitoringSwitch(requestServerId);
+			});
 	}
 
 	function pullSshMetrics(serverId) {
@@ -624,8 +929,8 @@
 
 		return postJson('api/pull-ssh-metrics', { server_id: serverId || '' })
 			.done(function (response) {
-				if (response && response.server_id) {
-					$('#realtimeDashboard').attr('data-server-id', response.server_id);
+				if (response && response.server_id && $('#realtimeDashboard').length && !activeMonitoringServerId) {
+					setActiveMonitoringServer(response.server_id);
 				}
 			})
 			.fail(function (xhr) {
@@ -644,14 +949,16 @@
 		}
 
 		initRealtimeCharts();
-		refreshRealtimeDashboard();
+		setActiveMonitoringServer($('#serverSelector').val() || $('#realtimeDashboard').attr('data-server-id') || 0);
 
 		$('#serverSelector').on('change', function () {
-			$('#realtimeDashboard').attr('data-server-id', this.value || 0);
-			refreshRealtimeDashboard();
+			switchRealtimeServer(this.value || 0);
 		});
 
-		refreshTimer = window.setInterval(refreshRealtimeDashboard, Math.min(config().pollInterval || 3000, 3000));
+		if (!startRealtimeStream()) {
+			refreshRealtimeDashboard();
+			refreshTimer = window.setInterval(refreshRealtimeDashboard, 1000);
+		}
 	}
 
 	function refreshNavbarServers() {
@@ -663,14 +970,20 @@
 
 		var serverId = Number($switcher.attr('data-selected-id') || 0);
 
-		pullSshMetrics(serverId).always(function () {
-			$.getJSON(apiUrl('api/server', { server_id: serverId }))
-				.done(function (response) {
-					if (response && response.ok) {
-						updateNavbarServers(response.servers || [], response.selected_server_id, response.server || {});
-					}
-				});
-		});
+		if (pullInFlight) {
+			return;
+		}
+
+		pullInFlight = true;
+		$.getJSON(apiUrl('api/server', { server_id: serverId || '' }))
+			.done(function (response) {
+				if (response && response.ok) {
+					updateNavbarServers(response.servers || [], response.selected_server_id, response.server || {});
+				}
+			})
+			.always(function () {
+				pullInFlight = false;
+			});
 	}
 
 	function bindNavbarServerSwitcher() {
@@ -680,6 +993,18 @@
 
 		refreshNavbarServers();
 		navbarRefreshTimer = window.setInterval(refreshNavbarServers, Math.min(config().pollInterval || 3000, 3000));
+	}
+
+	function bindNavbarServerOptions() {
+		$(document).on('click', '.navbar-server-option', function (event) {
+			if (!$('#realtimeDashboard').length) {
+				return;
+			}
+
+			event.preventDefault();
+
+			switchRealtimeServer($(this).data('server-id') || 0);
+		});
 	}
 
 	function bindLogViewer() {
@@ -1016,15 +1341,19 @@
 		bindFileManager();
 		bindRealtimeDashboard();
 		bindNavbarServerSwitcher();
+		bindNavbarServerOptions();
 		bindLogViewer();
 	});
 
 	window.addEventListener('beforeunload', function () {
+		stopRealtimeStream();
+
 		if (refreshTimer) {
 			window.clearInterval(refreshTimer);
 		}
 		if (navbarRefreshTimer) {
 			window.clearInterval(navbarRefreshTimer);
 		}
+		clearReconnectRetry();
 	});
 })(window);
