@@ -45,5 +45,10 @@ jobs:
               exit 1
             }
 
-            docker compose --env-file .env up -d --build --remove-orphans
-            docker compose --env-file .env ps
+            COMPOSE_FILES="-f docker-compose.yml"
+            if [ -f docker-compose.prod.yml ]; then
+              COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.prod.yml"
+            fi
+
+            docker compose --env-file .env $COMPOSE_FILES up -d --build --remove-orphans
+            docker compose --env-file .env $COMPOSE_FILES ps

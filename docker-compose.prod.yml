@@ -1,0 +1,13 @@
+services:
+  app:
+    networks:
+      default:
+      npm_proxy:
+        aliases:
+          - portfolio_app
+          - server_monitoring_app
+
+networks:
+  npm_proxy:
+    external: true
+    name: "${NPM_NETWORK:-docker_default}"
