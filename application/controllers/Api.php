@@ -633,7 +633,7 @@ class Api extends CI_Controller
 	{
 		$host = isset($_SERVER['HTTP_HOST']) ? strtolower($_SERVER['HTTP_HOST']) : '';
 		$is_local = strpos($host, 'localhost') === 0 || strpos($host, '127.0.0.1') === 0;
-		$is_https = ! empty($_SERVER['HTTPS']) && strtolower($_SERVER['HTTPS']) !== 'off';
+		$is_https = $this->request_is_https();
 
 		if ( ! $is_https && ! $is_local)
 		{
@@ -642,6 +642,49 @@ class Api extends CI_Controller
 		}
 
 		return TRUE;
+	}
+
+	protected function request_is_https()
+	{
+		if ( ! empty($_SERVER['HTTPS']) && strtolower((string) $_SERVER['HTTPS']) !== 'off')
+		{
+			return TRUE;
+		}
+
+		if (isset($_SERVER['SERVER_PORT']) && (int) $_SERVER['SERVER_PORT'] === 443)
+		{
+			return TRUE;
+		}
+
+		$forwarded_proto = isset($_SERVER['HTTP_X_FORWARDED_PROTO'])
+			? strtolower(trim(explode(',', (string) $_SERVER['HTTP_X_FORWARDED_PROTO'])[0]))
+			: '';
+
+		if ($forwarded_proto === 'https')
+		{
+			return TRUE;
+		}
+
+		$forwarded_scheme = isset($_SERVER['HTTP_X_FORWARDED_SCHEME'])
+			? strtolower(trim((string) $_SERVER['HTTP_X_FORWARDED_SCHEME']))
+			: '';
+
+		if ($forwarded_scheme === 'https')
+		{
+			return TRUE;
+		}
+
+		if (isset($_SERVER['HTTP_X_FORWARDED_SSL']) && strtolower((string) $_SERVER['HTTP_X_FORWARDED_SSL']) === 'on')
+		{
+			return TRUE;
+		}
+
+		if (isset($_SERVER['HTTP_FRONT_END_HTTPS']) && strtolower((string) $_SERVER['HTTP_FRONT_END_HTTPS']) === 'on')
+		{
+			return TRUE;
+		}
+
+		return FALSE;
 	}
 
 	protected function enforce_rate_limit($setting, $api_key)
