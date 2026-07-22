@@ -191,12 +191,17 @@ class Remote_agent_provisioner
 
 	protected function agent_id($config, $server)
 	{
+		if (isset($config->id) && (int) $config->id > 0)
+		{
+			return 'ssh-config-'.(int) $config->id;
+		}
+
 		if ($server && ! empty($server->agent_id))
 		{
 			return $server->agent_id;
 		}
 
-		return 'ssh-config-'.(int) $config->id;
+		return 'ssh-config-0';
 	}
 
 	protected function server_name($config, $server)

@@ -113,6 +113,7 @@ class Monitoring_model extends CI_Model
 			$agent_id = strtolower(preg_replace('/[^a-zA-Z0-9_\-\.]/', '-', $hostname));
 		}
 
+		$existing_by_agent = $this->find_server_by_agent($agent_id);
 		$existing = NULL;
 		if ($preferred_server_id)
 		{
@@ -122,9 +123,13 @@ class Monitoring_model extends CI_Model
 				->row();
 		}
 
-		if ( ! $existing)
+		if ($existing_by_agent && ( ! $existing || (int) $existing->id !== (int) $existing_by_agent->id))
 		{
-			$existing = $this->find_server_by_agent($agent_id);
+			$existing = $existing_by_agent;
+		}
+		elseif ( ! $existing)
+		{
+			$existing = $existing_by_agent;
 		}
 		$data = array(
 			'agent_id' => $agent_id,
@@ -822,7 +827,8 @@ class Monitoring_model extends CI_Model
 			$now = date('Y-m-d H:i:s');
 			$agent_id = 'ssh-config-'.$config->id;
 			$name = trim((string) $config->name) !== '' ? $config->name : 'SSH Server '.$config->id;
-			$server_id = ! empty($config->linked_server_id) ? (int) $config->linked_server_id : 0;
+			$agent_server = $this->find_server_by_agent($agent_id);
+			$server_id = $agent_server ? (int) $agent_server->id : (! empty($config->linked_server_id) ? (int) $config->linked_server_id : 0);
 
 			if ( ! $server_id)
 			{

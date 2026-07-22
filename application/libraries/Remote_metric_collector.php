@@ -48,11 +48,11 @@ class Remote_metric_collector
 	{
 		$server = isset($payload['server']) && is_array($payload['server']) ? $payload['server'] : array();
 		$hostname = isset($server['hostname']) && $server['hostname'] !== '' ? $server['hostname'] : $config->host;
+		$stable_agent_id = isset($config->id) && (int) $config->id > 0
+			? 'ssh-config-'.(int) $config->id
+			: 'ssh-'.strtolower(preg_replace('/[^a-zA-Z0-9_\-\.]/', '-', $hostname));
 
-		if (empty($payload['agent_id']))
-		{
-			$payload['agent_id'] = 'ssh-'.strtolower(preg_replace('/[^a-zA-Z0-9_\-\.]/', '-', $hostname));
-		}
+		$payload['agent_id'] = $stable_agent_id;
 
 		$server['agent_id'] = $payload['agent_id'];
 		$server['server_name'] = isset($config->name) && trim($config->name) !== '' ? $config->name : (isset($server['server_name']) && $server['server_name'] !== '' ? $server['server_name'] : $hostname);
