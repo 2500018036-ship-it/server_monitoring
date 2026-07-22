@@ -630,9 +630,12 @@ class Monitoring_model extends CI_Model
 
 		foreach ($this->array_value($payload, 'services', array()) as $service)
 		{
-			if ($this->array_value($service, 'status') === 'stopped')
+			$name = strtolower((string) $this->array_value($service, 'name', ''));
+			$status = strtolower((string) $this->array_value($service, 'status', ''));
+
+			if ($this->is_important_service($name) && $this->is_service_alert_status($status))
 			{
-				$alerts[] = array('level' => 'danger', 'message' => 'Service '.$this->array_value($service, 'name', 'unknown').' stopped.');
+				$alerts[] = array('level' => 'danger', 'message' => 'Service '.($name ?: 'unknown').' '.$status.'.');
 			}
 		}
 
@@ -692,7 +695,7 @@ class Monitoring_model extends CI_Model
 			$name = strtolower((string) $this->array_value($service, 'name', ''));
 			$status = strtolower((string) $this->array_value($service, 'status', ''));
 
-			if ($this->is_important_service($name) && ($status === 'stopped' || $status === 'offline' || $status === 'failed'))
+			if ($this->is_important_service($name) && $this->is_service_alert_status($status))
 			{
 				$warnings[] = 'Service '.($name ?: 'unknown').' '.$status;
 			}
@@ -744,6 +747,13 @@ class Monitoring_model extends CI_Model
 		$important = array('nginx', 'apache2', 'httpd', 'php-fpm', 'mysql', 'mariadb', 'docker', 'ssh', 'sshd');
 
 		return in_array($name, $important, TRUE);
+	}
+
+	protected function is_service_alert_status($status)
+	{
+		$status = strtolower(trim((string) $status));
+
+		return in_array($status, array('stopped', 'offline', 'failed'), TRUE);
 	}
 
 	protected function ensure_ssh_config_servers()

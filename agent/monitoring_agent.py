@@ -350,14 +350,45 @@ def service_payload():
 		if service in seen:
 			continue
 		seen.add(service)
-		status = command(["systemctl", "is-active", service])
+		state = service_state(service)
+		if not state:
+			continue
+
 		items.append({
 			"name": service,
-			"status": "running" if status == "active" else "stopped",
-			"log_excerpt": journal_excerpt(service),
+			"status": state["status"],
+			"log_excerpt": state["log_excerpt"] or journal_excerpt(service),
 		})
 
 	return items
+
+
+def service_state(service):
+	if not command(["which", "systemctl"]):
+		return None
+
+	output = command_combined(["systemctl", "show", service, "--property=LoadState,ActiveState,SubState"], timeout=3)
+	if not output:
+		return None
+
+	props = {}
+	for line in output.splitlines():
+		if "=" not in line:
+			continue
+		key, value = line.split("=", 1)
+		props[key] = value
+
+	load_state = props.get("LoadState", "")
+	if load_state in ("", "not-found"):
+		return None
+
+	active_state = props.get("ActiveState", "")
+	sub_state = props.get("SubState", "")
+
+	return {
+		"status": "running" if active_state == "active" else "stopped",
+		"log_excerpt": sub_state,
+	}
 
 
 def journal_excerpt(service):
