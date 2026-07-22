@@ -255,7 +255,29 @@ class Remote_agent_provisioner
 		$sudo = $this->CI->remote_ssh->execute($config, 'sudo -n true', 10);
 		$output[] = $this->format_result('check sudo nopasswd', $sudo);
 
-		return $sudo['ok'] ? 'sudo -n ' : FALSE;
+		if ($sudo['ok'])
+		{
+			return 'sudo -n ';
+		}
+
+		if (isset($config->auth_type) && $config->auth_type === 'password' && ! empty($config->password))
+		{
+			$password_sudo = $this->password_sudo_prefix($config->password);
+			$sudo_password = $this->CI->remote_ssh->execute($config, $password_sudo.'true', 10);
+			$output[] = $this->format_result('check sudo password', $sudo_password);
+
+			if ($sudo_password['ok'])
+			{
+				return $password_sudo;
+			}
+		}
+
+		return FALSE;
+	}
+
+	protected function password_sudo_prefix($password)
+	{
+		return 'printf '.remote_arg('%s\n').' '.remote_arg($password).' | sudo -S -p '.remote_arg(''). ' ';
 	}
 
 	protected function install_command($tmp_dir, $sudo)
