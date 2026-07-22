@@ -23,6 +23,9 @@ API_KEY = os.environ.get("SM_API_KEY", "change-me")
 AGENT_ID = os.environ.get("SM_AGENT_ID", socket.gethostname())
 SERVER_NAME = os.environ.get("SM_SERVER_NAME", socket.gethostname())
 INTERVAL = int(os.environ.get("SM_INTERVAL", "1"))
+CORE_INTERVAL = int(os.environ.get("SM_CORE_INTERVAL", "3"))
+SERVICE_INTERVAL = int(os.environ.get("SM_SERVICE_INTERVAL", "5"))
+HEAVY_INTERVAL = int(os.environ.get("SM_HEAVY_INTERVAL", "10"))
 VERIFY_TLS = os.environ.get("SM_VERIFY_TLS", "1") == "1"
 WEBSITES = [item.strip() for item in os.environ.get("SM_WEBSITES", "").split(",") if item.strip()]
 SERVICES = [item.strip() for item in os.environ.get("SM_SERVICES", "nginx,apache2,httpd,php-fpm,mysql,mariadb,docker,ssh,sshd,cron,crond").split(",") if item.strip()]
@@ -180,7 +183,7 @@ def boot_time():
 	return ""
 
 
-def cpu_payload():
+def cpu_payload(include_processes=False):
 	load = os.getloadavg() if hasattr(os, "getloadavg") else (0, 0, 0)
 	model = ""
 	frequency = 0
@@ -209,13 +212,13 @@ def cpu_payload():
 		"load_1": round(load[0], 2),
 		"load_5": round(load[1], 2),
 		"load_15": round(load[2], 2),
-		"top_processes": top_processes("cpu"),
+		"top_processes": top_processes("cpu") if include_processes else [],
 	}
 
 
-def memory_payload():
+def memory_payload(include_processes=False):
 	if not psutil:
-		return {"top_processes": top_processes("memory")}
+		return {"top_processes": top_processes("memory") if include_processes else []}
 
 	virtual = psutil.virtual_memory()
 	swap = psutil.swap_memory()
@@ -229,7 +232,7 @@ def memory_payload():
 		"swap_used_mb": bytes_to_mb(swap.used),
 		"swap_free_mb": bytes_to_mb(swap.free),
 		"usage_percent": virtual.percent,
-		"top_processes": top_processes("memory"),
+		"top_processes": top_processes("memory") if include_processes else [],
 	}
 
 
@@ -644,7 +647,7 @@ def now_string():
 	return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def payload():
+def payload(include_services=False, include_heavy=False):
 	region = azure_metadata("/compute/location") or os.environ.get("SM_AZURE_REGION", "")
 	server = {
 		"agent_id": AGENT_ID,
@@ -662,27 +665,36 @@ def payload():
 		"azure_region": region,
 	}
 
-	return {
+	data = {
 		"agent_id": AGENT_ID,
 		"metric_time": now_string(),
 		"response_time_ms": 0,
 		"latency_ms": 0,
+		"collected_sections": ["server", "system", "cpu", "memory", "storage", "network"],
 		"server": server,
 		"system": system_payload(),
-		"cpu": cpu_payload(),
-		"memory": memory_payload(),
+		"cpu": cpu_payload(include_heavy),
+		"memory": memory_payload(include_heavy),
 		"storage": storage_payload(),
 		"network": network_payload(),
-		"processes": {
+	}
+
+	if include_services:
+		data["collected_sections"].append("services")
+		data["services"] = service_payload()
+
+	if include_heavy:
+		data["collected_sections"].extend(["processes", "docker", "database", "websites", "logs"])
+		data["processes"] = {
 			"top_cpu": top_processes("cpu"),
 			"top_memory": top_processes("memory"),
-		},
-		"services": service_payload(),
-		"docker": docker_payload(),
-		"database": database_payload(),
-		"websites": website_payload(),
-		"logs": logs_payload(),
-	}
+		}
+		data["docker"] = docker_payload()
+		data["database"] = database_payload()
+		data["websites"] = website_payload()
+		data["logs"] = logs_payload()
+
+	return data
 
 
 def post_metrics(data):
@@ -708,11 +720,29 @@ def main():
 	if not API_KEY or API_KEY == "change-me":
 		raise SystemExit("SM_API_KEY is required")
 
+	last_core = 0
+	last_service = 0
+	last_heavy = 0
+
 	while True:
 		try:
-			data = payload()
+			now = time.time()
+			heavy_due = (now - last_heavy) >= max(HEAVY_INTERVAL, 1)
+			service_due = heavy_due or (now - last_service) >= max(SERVICE_INTERVAL, 1)
+			core_due = service_due or heavy_due or (now - last_core) >= max(CORE_INTERVAL, 1)
+
+			if not core_due:
+				time.sleep(max(INTERVAL, 1))
+				continue
+
+			data = payload(include_services=service_due, include_heavy=heavy_due)
 			response_time, status = post_metrics(data)
 			print(now_string(), "posted metrics", status, response_time, "ms", flush=True)
+			last_core = now
+			if service_due:
+				last_service = now
+			if heavy_due:
+				last_heavy = now
 		except urllib.error.HTTPError as error:
 			print(now_string(), "http error", error.code, error.read().decode("utf-8", "ignore"), flush=True)
 		except Exception as error:

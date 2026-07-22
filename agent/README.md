@@ -21,9 +21,18 @@ sudo apt update
 sudo apt install -y python3-psutil
 ```
 
-The agent posts real metrics every 1 second to `SM_API_URL` with `X-API-Key`.
+The agent posts core metrics on a tiered cadence:
+
+- `SM_CORE_INTERVAL=3` for CPU, RAM, storage, and network
+- `SM_SERVICE_INTERVAL=5` for service status
+- `SM_HEAVY_INTERVAL=10` for processes, Docker, database, website probes, and logs
+
+`SM_INTERVAL` remains the loop tick and should stay at `1` unless you know you need something else.
+
+Each agent should use a unique `SM_API_KEY`. The SSH installer now provisions a per-server key automatically.
 
 `SM_API_URL` must be reachable from the VPS. Do not use `localhost` unless the web app runs on the same server as the agent.
+Use `https://...` for `SM_API_URL`; non-HTTPS endpoints should be treated as unsupported for remote agents.
 
 Recommended admin flow:
 

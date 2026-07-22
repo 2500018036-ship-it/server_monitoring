@@ -21,7 +21,9 @@ class Settings extends MY_Controller
 		$this->require_post();
 		$this->form_validation->set_rules('app_name', 'Nama Aplikasi', 'required|trim');
 		$this->form_validation->set_rules('timezone', 'Timezone', 'required|trim');
-		$this->form_validation->set_rules('monitoring_interval', 'Monitoring Interval', 'required|integer|greater_than[0]|less_than_equal_to[3]');
+		$this->form_validation->set_rules('monitoring_interval', 'Monitoring Interval', 'required|integer|greater_than[0]|less_than_equal_to[60]');
+		$this->form_validation->set_rules('process_retention_days', 'Process Retention', 'required|integer|greater_than[0]|less_than_equal_to[365]');
+		$this->form_validation->set_rules('log_retention_days', 'Log Retention', 'required|integer|greater_than[0]|less_than_equal_to[365]');
 		$this->form_validation->set_rules('agent_api_key', 'Agent API Key', 'required|trim|min_length[20]');
 		$this->form_validation->set_rules('api_rate_limit_per_minute', 'API Rate Limit', 'required|integer|greater_than[0]');
 
@@ -53,6 +55,8 @@ class Settings extends MY_Controller
 			'smtp_user' => $this->input->post('smtp_user', TRUE),
 			'smtp_password' => $this->input->post('smtp_password', TRUE),
 			'monitoring_interval' => $this->input->post('monitoring_interval', TRUE),
+			'process_retention_days' => $this->input->post('process_retention_days', TRUE),
+			'log_retention_days' => $this->input->post('log_retention_days', TRUE),
 			'agent_api_key' => $this->input->post('agent_api_key', TRUE),
 			'api_allowed_origins' => $this->input->post('api_allowed_origins', TRUE),
 			'api_rate_limit_per_minute' => $this->input->post('api_rate_limit_per_minute', TRUE),

@@ -16,7 +16,7 @@ class Logs extends MY_Controller
 		$this->render('logs/index', array(
 			'page_title' => 'Logs',
 			'monitoring' => $this->Monitoring_model->dashboard_payload($server_id),
-			'poll_interval' => min((int) $this->Setting_model->get_settings()->monitoring_interval, 3),
+			'poll_interval' => max((int) $this->Setting_model->get_settings()->monitoring_interval, 1),
 		));
 	}
 

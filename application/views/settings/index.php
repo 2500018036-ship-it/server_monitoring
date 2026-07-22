@@ -54,7 +54,7 @@ $timezones = array('Asia/Jakarta', 'Asia/Makassar', 'Asia/Jayapura', 'UTC', 'Asi
 								<div class="form-group mb-0">
 									<label>Monitoring Interval</label>
 									<div class="input-group">
-										<input type="number" name="monitoring_interval" class="form-control" min="1" max="3" value="<?php echo e($setting->monitoring_interval); ?>" required>
+										<input type="number" name="monitoring_interval" class="form-control" min="1" max="60" value="<?php echo e($setting->monitoring_interval); ?>" required>
 										<div class="input-group-append"><span class="input-group-text">detik</span></div>
 									</div>
 								</div>
@@ -121,6 +121,26 @@ $timezones = array('Asia/Jakarta', 'Asia/Makassar', 'Asia/Jayapura', 'UTC', 'Asi
 								<div class="form-group">
 									<label>Agent API Key</label>
 									<input type="text" name="agent_api_key" class="form-control" value="<?php echo e(isset($setting->agent_api_key) ? $setting->agent_api_key : ''); ?>" required>
+								</div>
+								<div class="row">
+									<div class="col-md-6">
+										<div class="form-group">
+											<label>Process Retention</label>
+											<div class="input-group">
+												<input type="number" name="process_retention_days" class="form-control" min="1" max="365" value="<?php echo e(isset($setting->process_retention_days) ? $setting->process_retention_days : 7); ?>" required>
+												<div class="input-group-append"><span class="input-group-text">hari</span></div>
+											</div>
+										</div>
+									</div>
+									<div class="col-md-6">
+										<div class="form-group">
+											<label>Log Retention</label>
+											<div class="input-group">
+												<input type="number" name="log_retention_days" class="form-control" min="1" max="365" value="<?php echo e(isset($setting->log_retention_days) ? $setting->log_retention_days : 14); ?>" required>
+												<div class="input-group-append"><span class="input-group-text">hari</span></div>
+											</div>
+										</div>
+									</div>
 								</div>
 								<div class="form-group">
 									<label>Allowed Origins</label>

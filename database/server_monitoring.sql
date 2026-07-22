@@ -124,7 +124,12 @@ CREATE TABLE `settings` (
 	`smtp_port` INT UNSIGNED DEFAULT NULL,
 	`smtp_user` VARCHAR(120) DEFAULT NULL,
 	`smtp_password` TEXT NULL,
-	`monitoring_interval` INT UNSIGNED NOT NULL DEFAULT 60,
+	`monitoring_interval` INT UNSIGNED NOT NULL DEFAULT 10,
+	`process_retention_days` INT UNSIGNED NOT NULL DEFAULT 7,
+	`log_retention_days` INT UNSIGNED NOT NULL DEFAULT 14,
+	`agent_api_key` VARCHAR(128) DEFAULT NULL,
+	`api_allowed_origins` TEXT NULL,
+	`api_rate_limit_per_minute` INT UNSIGNED NOT NULL DEFAULT 1000,
 	`created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -181,17 +186,14 @@ INSERT INTO `role_permissions` (`role_id`, `permission_id`) VALUES
 INSERT INTO `users` (`id`, `fullname`, `username`, `email`, `password`, `role_id`, `photo`, `status`, `remember_token`, `last_login`, `last_login_ip`, `created_at`, `updated_at`) VALUES
 	(1, 'Super Admin', 'admin', 'admin@servermonitoring.local', '$2y$10$Lo66HWVwmuf4zdYG7myMuet0WQDu47O5xyXdf4PcbgvsRfRrVC5JK', 1, NULL, 'active', NULL, NULL, NULL, CURRENT_TIMESTAMP, NULL);
 
-INSERT INTO `settings` (`id`, `app_name`, `logo`, `favicon`, `timezone`, `telegram_bot_token`, `telegram_chat_id`, `openai_api_key`, `gemini_api_key`, `ollama_url`, `smtp_host`, `smtp_port`, `smtp_user`, `smtp_password`, `monitoring_interval`, `created_at`) VALUES
-	(1, 'Server Monitoring', NULL, NULL, 'Asia/Jakarta', NULL, NULL, NULL, NULL, 'http://localhost:11434', NULL, NULL, NULL, NULL, 60, CURRENT_TIMESTAMP);
-
-ALTER TABLE `settings`
-	ADD COLUMN `agent_api_key` VARCHAR(128) DEFAULT 'sm_agent_00c3ed8d3079d40bcc7395a79e864c50842932b5b39a8b7f' AFTER `monitoring_interval`,
-	ADD COLUMN `api_allowed_origins` TEXT NULL AFTER `agent_api_key`,
-	ADD COLUMN `api_rate_limit_per_minute` INT UNSIGNED NOT NULL DEFAULT 1000 AFTER `api_allowed_origins`;
+INSERT INTO `settings` (`id`, `app_name`, `logo`, `favicon`, `timezone`, `telegram_bot_token`, `telegram_chat_id`, `openai_api_key`, `gemini_api_key`, `ollama_url`, `smtp_host`, `smtp_port`, `smtp_user`, `smtp_password`, `monitoring_interval`, `process_retention_days`, `log_retention_days`, `agent_api_key`, `api_allowed_origins`, `api_rate_limit_per_minute`, `created_at`) VALUES
+	(1, 'Server Monitoring', NULL, NULL, 'Asia/Jakarta', NULL, NULL, NULL, NULL, 'http://localhost:11434', NULL, NULL, NULL, NULL, 10, 7, 14, NULL, NULL, 1000, CURRENT_TIMESTAMP);
 
 UPDATE `settings`
-SET `monitoring_interval` = 3,
-	`agent_api_key` = 'sm_agent_00c3ed8d3079d40bcc7395a79e864c50842932b5b39a8b7f',
+SET `monitoring_interval` = 10,
+	`process_retention_days` = 7,
+	`log_retention_days` = 14,
+	`agent_api_key` = LOWER(CONCAT('sm_install_', SUBSTRING(SHA2(UUID(), 256), 1, 48))),
 	`api_rate_limit_per_minute` = 1000
 WHERE `id` = 1;
 

@@ -21,7 +21,7 @@ class Dashboard extends MY_Controller
 			'total_servers' => $this->Server_model->count_all(),
 			'total_users' => $this->User_model->count_all(),
 			'monitoring' => $monitoring,
-			'poll_interval' => min((int) $this->Setting_model->get_settings()->monitoring_interval, 3),
+			'poll_interval' => max((int) $this->Setting_model->get_settings()->monitoring_interval, 1),
 		));
 	}
 }

@@ -66,6 +66,7 @@ class Remote_agent_provisioner
 		$server = $this->linked_server($config);
 		$agent_id = $this->agent_id($config, $server);
 		$server_name = $this->server_name($config, $server);
+		$agent_api_key = $this->agent_api_key($setting, $server, $agent_id);
 		$tmp_dir = $this->remote_tmp_base.'-'.(int) $config->id.'-'.time();
 		$output = array();
 
@@ -92,7 +93,7 @@ class Remote_agent_provisioner
 			return $this->failed('Gagal membuat temp folder di VPS.', $metrics_url, $output);
 		}
 
-		$env_content = $this->env_content($setting, $metrics_url, $agent_id, $server_name);
+		$env_content = $this->env_content($agent_api_key, $metrics_url, $agent_id, $server_name);
 		$uploads = array(
 			array('local' => $agent_path, 'remote' => $tmp_dir.'/monitoring_agent.py', 'type' => 'file'),
 			array('local' => $service_template_path, 'remote' => $tmp_dir.'/monitoring-agent.service', 'type' => 'file'),
@@ -167,6 +168,11 @@ class Remote_agent_provisioner
 			return 'Endpoint agent masih memakai localhost. VPS tidak bisa mengirim heartbeat ke localhost laptop. Set APP_BASE_URL atau AGENT_PUBLIC_BASE_URL ke domain/IP publik aplikasi monitoring dulu.';
 		}
 
+		if ($scheme !== 'https')
+		{
+			return 'Endpoint agent wajib HTTPS agar API key dan payload metrics tidak terkirim plaintext.';
+		}
+
 		return NULL;
 	}
 
@@ -203,20 +209,22 @@ class Remote_agent_provisioner
 		return ! empty($config->name) ? $config->name : 'SSH Server '.(int) $config->id;
 	}
 
-	protected function env_content($setting, $metrics_url, $agent_id, $server_name)
+	protected function env_content($agent_api_key, $metrics_url, $agent_id, $server_name)
 	{
-		$verify_tls = strtolower((string) parse_url($metrics_url, PHP_URL_SCHEME)) === 'https' ? '1' : '0';
 		$services = implode(',', remote_service_names());
 
 		$lines = array(
 			'SM_API_URL' => $metrics_url,
-			'SM_API_KEY' => isset($setting->agent_api_key) ? $setting->agent_api_key : '',
+			'SM_API_KEY' => $agent_api_key,
 			'SM_AGENT_ID' => $agent_id,
 			'SM_SERVER_NAME' => $server_name,
 			'SM_PROVIDER' => 'Linux VPS',
 			'SM_AZURE_REGION' => '',
 			'SM_INTERVAL' => '1',
-			'SM_VERIFY_TLS' => $verify_tls,
+			'SM_CORE_INTERVAL' => '3',
+			'SM_SERVICE_INTERVAL' => '5',
+			'SM_HEAVY_INTERVAL' => '10',
+			'SM_VERIFY_TLS' => '1',
 			'SM_WEBSITES' => '',
 			'SM_SERVICES' => $services,
 		);
@@ -228,6 +236,43 @@ class Remote_agent_provisioner
 		}
 
 		return $content;
+	}
+
+	protected function agent_api_key($setting, $server, $agent_id)
+	{
+		if ($server && ! empty($server->api_key) && $server->api_key !== 'ssh-pull')
+		{
+			return $server->api_key;
+		}
+
+		$key = $this->generate_api_key('sm_agent_');
+
+		if ($server)
+		{
+			$this->CI->db
+				->where('id', (int) $server->id)
+				->update('servers', array(
+					'agent_id' => $agent_id,
+					'api_key' => $key,
+					'updated_at' => date('Y-m-d H:i:s'),
+				));
+
+			return $key;
+		}
+
+		return isset($setting->agent_api_key) ? (string) $setting->agent_api_key : $key;
+	}
+
+	protected function generate_api_key($prefix)
+	{
+		try
+		{
+			return strtolower($prefix.bin2hex(random_bytes(24)));
+		}
+		catch (Exception $e)
+		{
+			return strtolower($prefix.sha1(uniqid('', TRUE).microtime(TRUE)));
+		}
 	}
 
 	protected function env_quote($value)

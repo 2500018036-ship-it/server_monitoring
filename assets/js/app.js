@@ -957,7 +957,7 @@
 
 		if (!startRealtimeStream()) {
 			refreshRealtimeDashboard();
-			refreshTimer = window.setInterval(refreshRealtimeDashboard, 1000);
+			refreshTimer = window.setInterval(refreshRealtimeDashboard, Math.max(config().pollInterval || 3000, 3000));
 		}
 	}
 
@@ -992,7 +992,7 @@
 		}
 
 		refreshNavbarServers();
-		navbarRefreshTimer = window.setInterval(refreshNavbarServers, Math.min(config().pollInterval || 3000, 3000));
+		navbarRefreshTimer = window.setInterval(refreshNavbarServers, Math.max(config().pollInterval || 3000, 3000));
 	}
 
 	function bindNavbarServerOptions() {
@@ -1066,7 +1066,7 @@
 		});
 
 		loadLogs();
-		window.setInterval(loadLogs, Math.min(config().pollInterval || 3000, 3000));
+		window.setInterval(loadLogs, Math.max(config().pollInterval || 3000, 3000));
 	}
 
 	function bindRemoteActionForms() {

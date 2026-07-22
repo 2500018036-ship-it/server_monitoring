@@ -475,8 +475,22 @@ class Api extends CI_Controller
 
 		$setting = $this->Setting_model->get_settings();
 		$key = $this->extract_api_key();
+		$agent_id = $this->extract_agent_id();
+		$server = $agent_id ? $this->Monitoring_model->find_server_by_agent($agent_id) : NULL;
+		$server_key = $server && ! empty($server->api_key) ? (string) $server->api_key : '';
+		$install_key = isset($setting->agent_api_key) ? (string) $setting->agent_api_key : '';
+		$valid = FALSE;
 
-		if ( ! $key || ! isset($setting->agent_api_key) || ! hash_equals((string) $setting->agent_api_key, (string) $key))
+		if ($key && $server_key !== '' && $server_key !== 'ssh-pull' && hash_equals($server_key, (string) $key))
+		{
+			$valid = TRUE;
+		}
+		elseif ($key && $install_key !== '' && hash_equals($install_key, (string) $key))
+		{
+			$valid = TRUE;
+		}
+
+		if ( ! $valid)
 		{
 			$this->json_response(array('ok' => FALSE, 'message' => 'Invalid API key.'), 401);
 			exit;
@@ -489,6 +503,19 @@ class Api extends CI_Controller
 		$this->enforce_rate_limit($setting, $key);
 
 		return TRUE;
+	}
+
+	protected function extract_agent_id()
+	{
+		$agent_id = $this->safe_array_value($this->json_payload, 'agent_id');
+
+		if ($agent_id)
+		{
+			return trim((string) $agent_id);
+		}
+
+		$server = $this->safe_array_value($this->json_payload, 'server', array());
+		return is_array($server) && ! empty($server['agent_id']) ? trim((string) $server['agent_id']) : '';
 	}
 
 	protected function is_session_authenticated()

@@ -4,6 +4,7 @@ defined('BASEPATH') OR exit('No direct script access allowed');
 class Monitoring_model extends CI_Model
 {
 	const OFFLINE_AFTER_SECONDS = 180;
+	const RETENTION_PRUNE_CHANCE = 50;
 
 	public function mark_stale_servers_offline()
 	{
@@ -127,7 +128,6 @@ class Monitoring_model extends CI_Model
 		}
 		$data = array(
 			'agent_id' => $agent_id,
-			'api_key' => $api_key,
 			'server_name' => $this->array_value($server, 'server_name', $hostname),
 			'hostname' => $hostname,
 			'public_ip' => $this->array_value($server, 'public_ip'),
@@ -148,11 +148,21 @@ class Monitoring_model extends CI_Model
 
 		if ($existing)
 		{
+			if ( ! empty($existing->api_key))
+			{
+				$data['api_key'] = $existing->api_key;
+			}
+			elseif ($api_key)
+			{
+				$data['api_key'] = $api_key;
+			}
+
 			$this->db->where('id', $existing->id)->update('servers', $data);
 
 			return (int) $existing->id;
 		}
 
+		$data['api_key'] = $api_key;
 		$data['created_at'] = date('Y-m-d H:i:s');
 		$this->db->insert('servers', $data);
 
@@ -256,6 +266,9 @@ class Monitoring_model extends CI_Model
 
 	public function record_metrics($server_id, $payload, $ip_address = NULL)
 	{
+		$incoming = is_array($payload) ? $this->sanitize_payload($payload) : array();
+		$sections = $this->collected_sections($incoming);
+		$payload = $this->merge_with_latest_payload($server_id, $incoming);
 		$metric_time = $this->normalize_datetime($this->array_value($payload, 'metric_time')) ?: date('Y-m-d H:i:s');
 		$cpu = $this->array_value($payload, 'cpu', array());
 		$memory = $this->array_value($payload, 'memory', array());
@@ -266,31 +279,59 @@ class Monitoring_model extends CI_Model
 		$latency = $this->to_nullable_int($this->array_value($payload, 'latency_ms'));
 		$network = $this->network_with_speeds($server_id, $metric_time, $network);
 
-		if (is_array($payload))
-		{
-			$payload['network'] = $network;
-		}
+		$payload['network'] = $network;
 
 		$this->db->trans_start();
 		$this->record_heartbeat($server_id, $response_time, $latency, $ip_address);
 		$this->update_system_snapshot($server_id, $payload, $system);
 		$this->insert_server_metric($server_id, $metric_time, $payload, $cpu, $memory, $storage, $network);
-		$this->insert_cpu_history($server_id, $metric_time, $cpu);
-		$this->insert_memory_history($server_id, $metric_time, $memory);
-		$this->insert_storage_history($server_id, $metric_time, $storage);
-		$this->insert_network_history($server_id, $metric_time, $network);
-		$this->insert_process_history($server_id, $metric_time, $payload);
-		$this->insert_service_logs($server_id, $metric_time, $this->array_value($payload, 'services', array()));
-		$this->insert_docker_logs($server_id, $metric_time, $this->array_value($payload, 'docker', array()));
-		$this->insert_database_logs($server_id, $metric_time, $this->array_value($payload, 'database', array()));
-		$this->insert_website_logs($server_id, $metric_time, $this->array_value($payload, 'websites', array()));
-		$this->insert_system_logs($server_id, $metric_time, $this->array_value($payload, 'logs', array()));
+		if ($this->section_collected($sections, 'cpu'))
+		{
+			$this->insert_cpu_history($server_id, $metric_time, $cpu);
+		}
+		if ($this->section_collected($sections, 'memory'))
+		{
+			$this->insert_memory_history($server_id, $metric_time, $memory);
+		}
+		if ($this->section_collected($sections, 'storage'))
+		{
+			$this->insert_storage_history($server_id, $metric_time, $storage);
+		}
+		if ($this->section_collected($sections, 'network'))
+		{
+			$this->insert_network_history($server_id, $metric_time, $network);
+		}
+		if ($this->section_collected($sections, 'processes'))
+		{
+			$this->insert_process_history($server_id, $metric_time, $payload);
+		}
+		if ($this->section_collected($sections, 'services'))
+		{
+			$this->insert_service_logs($server_id, $metric_time, $this->array_value($payload, 'services', array()));
+		}
+		if ($this->section_collected($sections, 'docker'))
+		{
+			$this->insert_docker_logs($server_id, $metric_time, $this->array_value($payload, 'docker', array()));
+		}
+		if ($this->section_collected($sections, 'database'))
+		{
+			$this->insert_database_logs($server_id, $metric_time, $this->array_value($payload, 'database', array()));
+		}
+		if ($this->section_collected($sections, 'websites'))
+		{
+			$this->insert_website_logs($server_id, $metric_time, $this->array_value($payload, 'websites', array()));
+		}
+		if ($this->section_collected($sections, 'logs'))
+		{
+			$this->insert_system_logs($server_id, $metric_time, $this->array_value($payload, 'logs', array()));
+		}
 		$this->db->trans_complete();
 
 		$status = $this->db->trans_status();
 
 		if ($status)
 		{
+			$this->maybe_prune_retention();
 			$this->dispatch_monitoring_notifications($server_id, $payload, $metric_time);
 		}
 
@@ -304,7 +345,8 @@ class Monitoring_model extends CI_Model
 			return TRUE;
 		}
 
-		$this->insert_system_logs($server_id, date('Y-m-d H:i:s'), $logs);
+		$this->insert_system_logs($server_id, date('Y-m-d H:i:s'), $this->sanitize_logs($logs));
+		$this->maybe_prune_retention();
 
 		return TRUE;
 	}
@@ -1224,7 +1266,7 @@ class Monitoring_model extends CI_Model
 
 	protected function insert_status_log($server_id, $level, $source, $message, $logged_at)
 	{
-		$message = trim((string) $message);
+		$message = $this->mask_sensitive_text($message);
 
 		if ($message === '' || $this->system_log_exists($server_id, $source, $message))
 		{
@@ -1299,6 +1341,252 @@ class Monitoring_model extends CI_Model
 		$first = reset($processes);
 
 		return is_array($first) ? $this->array_value($first, 'command') : NULL;
+	}
+
+	protected function collected_sections($payload)
+	{
+		$sections = $this->array_value($payload, 'collected_sections', array());
+
+		if (empty($sections) || ! is_array($sections))
+		{
+			return array('cpu', 'memory', 'storage', 'network', 'processes', 'services', 'docker', 'database', 'websites', 'logs');
+		}
+
+		return array_values(array_unique(array_map('strval', $sections)));
+	}
+
+	protected function section_collected($sections, $section)
+	{
+		return in_array($section, $sections, TRUE);
+	}
+
+	protected function merge_with_latest_payload($server_id, $payload)
+	{
+		$metric = $this->get_latest_metric($server_id);
+		$latest_payload = $metric && ! empty($metric->payload) ? json_decode($metric->payload, TRUE) : array();
+
+		if ( ! is_array($latest_payload))
+		{
+			$latest_payload = array();
+		}
+
+		return array_replace_recursive($latest_payload, $payload);
+	}
+
+	protected function sanitize_payload($payload)
+	{
+		if ( ! is_array($payload))
+		{
+			return array();
+		}
+
+		if (isset($payload['cpu']) && is_array($payload['cpu']))
+		{
+			$payload['cpu']['top_processes'] = $this->sanitize_process_rows($this->array_value($payload['cpu'], 'top_processes', array()));
+		}
+
+		if (isset($payload['memory']) && is_array($payload['memory']))
+		{
+			$payload['memory']['top_processes'] = $this->sanitize_process_rows($this->array_value($payload['memory'], 'top_processes', array()));
+		}
+
+		if (isset($payload['processes']))
+		{
+			$payload['processes'] = $this->sanitize_process_groups($this->array_value($payload, 'processes', array()));
+		}
+
+		if (isset($payload['services']))
+		{
+			$payload['services'] = $this->sanitize_service_rows($this->array_value($payload, 'services', array()));
+		}
+
+		if (isset($payload['docker']))
+		{
+			$payload['docker'] = $this->sanitize_docker_payload($this->array_value($payload, 'docker', array()));
+		}
+
+		if (isset($payload['database']))
+		{
+			$payload['database'] = $this->sanitize_database_payload($this->array_value($payload, 'database', array()));
+		}
+
+		if (isset($payload['logs']))
+		{
+			$payload['logs'] = $this->sanitize_logs($this->array_value($payload, 'logs', array()));
+		}
+
+		return $payload;
+	}
+
+	protected function sanitize_process_groups($groups)
+	{
+		if ( ! is_array($groups))
+		{
+			return array();
+		}
+
+		foreach ($groups as $key => $rows)
+		{
+			$groups[$key] = $this->sanitize_process_rows($rows);
+		}
+
+		return $groups;
+	}
+
+	protected function sanitize_process_rows($rows)
+	{
+		if (empty($rows) || ! is_array($rows))
+		{
+			return array();
+		}
+
+		foreach ($rows as $index => $row)
+		{
+			if ( ! is_array($row))
+			{
+				continue;
+			}
+
+			$row['command'] = $this->mask_sensitive_text($this->array_value($row, 'command', ''));
+			$rows[$index] = $row;
+		}
+
+		return $rows;
+	}
+
+	protected function sanitize_service_rows($rows)
+	{
+		if (empty($rows) || ! is_array($rows))
+		{
+			return array();
+		}
+
+		foreach ($rows as $index => $row)
+		{
+			if ( ! is_array($row))
+			{
+				continue;
+			}
+
+			$row['log_excerpt'] = $this->mask_sensitive_text($this->array_value($row, 'log_excerpt', ''));
+			$rows[$index] = $row;
+		}
+
+		return $rows;
+	}
+
+	protected function sanitize_docker_payload($docker)
+	{
+		if ( ! is_array($docker))
+		{
+			return array();
+		}
+
+		$containers = $this->array_value($docker, 'containers', array());
+		foreach ($containers as $index => $container)
+		{
+			if ( ! is_array($container))
+			{
+				continue;
+			}
+
+			$container['ports'] = $this->mask_sensitive_text($this->array_value($container, 'ports', ''));
+			$container['network'] = $this->mask_sensitive_text($this->array_value($container, 'network', ''));
+			$container['volume'] = $this->mask_sensitive_text($this->array_value($container, 'volume', ''));
+			$containers[$index] = $container;
+		}
+
+		$docker['containers'] = $containers;
+		return $docker;
+	}
+
+	protected function sanitize_database_payload($database)
+	{
+		if ( ! is_array($database))
+		{
+			return array();
+		}
+
+		$database['connection_status'] = $this->mask_sensitive_text($this->array_value($database, 'connection_status', ''));
+		return $database;
+	}
+
+	protected function sanitize_logs($logs)
+	{
+		if (empty($logs) || ! is_array($logs))
+		{
+			return array();
+		}
+
+		foreach ($logs as $index => $log)
+		{
+			if ( ! is_array($log))
+			{
+				continue;
+			}
+
+			$log['message'] = $this->mask_sensitive_text($this->array_value($log, 'message', ''));
+			$log['source'] = $this->mask_sensitive_text($this->array_value($log, 'source', ''));
+			$logs[$index] = $log;
+		}
+
+		return $logs;
+	}
+
+	protected function mask_sensitive_text($text)
+	{
+		$text = trim((string) $text);
+
+		if ($text === '')
+		{
+			return '';
+		}
+
+		$patterns = array(
+			'/(password|passwd|pwd|token|secret|apikey|api_key|authorization)(\s*[:=]\s*|\s+)([^\s"\']+)/i',
+			'/(--password|--token|--secret|--apikey|--api-key)(=|\s+)([^\s"\']+)/i',
+			'/\b(eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,})\b/',
+		);
+
+		$replacements = array(
+			'$1$2[redacted]',
+			'$1$2[redacted]',
+			'[redacted-jwt]',
+		);
+
+		return preg_replace($patterns, $replacements, $text);
+	}
+
+	protected function maybe_prune_retention()
+	{
+		if (random_int(1, self::RETENTION_PRUNE_CHANCE) !== 1)
+		{
+			return FALSE;
+		}
+
+		$this->load->model('Setting_model');
+		$settings = $this->Setting_model->get_settings();
+		$process_days = max((int) (isset($settings->process_retention_days) ? $settings->process_retention_days : 7), 1);
+		$log_days = max((int) (isset($settings->log_retention_days) ? $settings->log_retention_days : 14), 1);
+
+		$this->prune_table('process_history', 'metric_time', $process_days);
+		$this->prune_table('service_logs', 'logged_at', $log_days);
+		$this->prune_table('docker_logs', 'logged_at', $log_days);
+		$this->prune_table('database_logs', 'logged_at', $log_days);
+		$this->prune_table('website_logs', 'last_check', $log_days);
+		$this->prune_table('system_logs', 'logged_at', $log_days);
+		$this->prune_table('heartbeat', 'heartbeat_at', $log_days);
+
+		return TRUE;
+	}
+
+	protected function prune_table($table, $time_field, $days)
+	{
+		$threshold = date('Y-m-d H:i:s', time() - (max((int) $days, 1) * 86400));
+
+		return $this->db
+			->where($time_field.' <', $threshold)
+			->delete($table);
 	}
 
 	protected function array_value($array, $key, $default = NULL)

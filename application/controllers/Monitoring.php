@@ -16,7 +16,7 @@ class Monitoring extends MY_Controller
 		$this->render('monitoring/index', array(
 			'page_title' => 'Monitoring',
 			'monitoring' => $this->Monitoring_model->dashboard_payload($server_id),
-			'poll_interval' => min((int) $this->Setting_model->get_settings()->monitoring_interval, 3),
+			'poll_interval' => max((int) $this->Setting_model->get_settings()->monitoring_interval, 1),
 		));
 	}
 }
