@@ -1,10 +1,21 @@
 .DS_Store
+.env
+.env.*
+!.env.example
+
+*.pyc
+__pycache__/
+agent/__pycache__/
 
 application/cache/*
 !application/cache/index.html
 
 application/logs/*
 !application/logs/index.html
+
+uploads/backup/*
+uploads/files/*
+uploads/tmp/*
 
 !application/*/.htaccess
 

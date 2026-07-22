@@ -73,13 +73,19 @@ defined('BASEPATH') OR exit('No direct script access allowed');
 $active_group = 'default';
 $query_builder = TRUE;
 
+$env = function ($key, $default = NULL) {
+	$value = getenv($key);
+
+	return $value === FALSE ? $default : $value;
+};
+
 $db['default'] = array(
 	'dsn'	=> '',
-	'hostname' => 'localhost',
-	'username' => 'root',
-	'password' => '',
-	'database' => 'server_monitoring',
-	'dbdriver' => 'mysqli',
+	'hostname' => $env('DB_HOST', 'localhost'),
+	'username' => $env('DB_USERNAME', 'root'),
+	'password' => $env('DB_PASSWORD', ''),
+	'database' => $env('DB_DATABASE', 'server_monitoring'),
+	'dbdriver' => $env('DB_DRIVER', 'mysqli'),
 	'dbprefix' => '',
 	'pconnect' => FALSE,
 	'db_debug' => (ENVIRONMENT !== 'production'),

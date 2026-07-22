@@ -686,7 +686,16 @@ def log_payload():
 				"logged_at": now_string(),
 			})
 
-	return unique_logs(items)[-80:]
+	items = unique_logs(items)
+	if not items:
+		items.append({
+			"log_type": "system",
+			"level": "warning",
+			"source": "collector",
+			"message": "Tidak ada log yang bisa dibaca oleh user SSH. Cek akses journalctl, docker, atau file /var/log.",
+			"logged_at": now_string(),
+		})
+	return items[-80:]
 
 
 def tail(path, lines=10):

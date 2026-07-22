@@ -1,0 +1,59 @@
+services:
+  app:
+    build:
+      context: .
+    container_name: server_monitoring_app
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8080}:80"
+    environment:
+      CI_ENV: "${CI_ENV:-development}"
+      APP_BASE_URL: "${DOCKER_APP_BASE_URL:-http://localhost:8080/}"
+      APP_INDEX_PAGE: "${APP_INDEX_PAGE:-index.php}"
+      APP_ENCRYPTION_KEY: "${APP_ENCRYPTION_KEY:-change-this-to-a-long-random-string}"
+      APP_LOG_THRESHOLD: "${APP_LOG_THRESHOLD:-1}"
+      APP_COOKIE_SECURE: "${APP_COOKIE_SECURE:-false}"
+      APP_CSRF_PROTECTION: "${APP_CSRF_PROTECTION:-true}"
+      APP_SESSION_COOKIE: "${APP_SESSION_COOKIE:-server_monitoring_session}"
+      APP_SESSION_SAVE_PATH: "${APP_SESSION_SAVE_PATH:-sessions}"
+      APP_SESSION_EXPIRATION: "${APP_SESSION_EXPIRATION:-3600}"
+      APP_SESSION_SAMESITE: "${APP_SESSION_SAMESITE:-Lax}"
+      DB_HOST: db
+      DB_USERNAME: "${DOCKER_DB_USER:-server_monitoring}"
+      DB_PASSWORD: "${DOCKER_DB_PASSWORD:-server_monitoring}"
+      DB_DATABASE: "${DOCKER_DB_DATABASE:-server_monitoring}"
+      DB_DRIVER: mysqli
+    volumes:
+      - uploads_data:/var/www/html/uploads
+      - app_logs:/var/www/html/application/logs
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: mariadb:10.11
+    container_name: server_monitoring_db
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: "${DOCKER_DB_ROOT_PASSWORD:-root}"
+      MARIADB_DATABASE: "${DOCKER_DB_DATABASE:-server_monitoring}"
+      MARIADB_USER: "${DOCKER_DB_USER:-server_monitoring}"
+      MARIADB_PASSWORD: "${DOCKER_DB_PASSWORD:-server_monitoring}"
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "${DB_PORT:-3307}:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./database/server_monitoring.sql:/docker-entrypoint-initdb.d/01-server-monitoring.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -u root -p$${MARIADB_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  db_data:
+  uploads_data:
+  app_logs:

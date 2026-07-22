@@ -53,7 +53,48 @@
  *
  * NOTE: If you change these, also change the error_reporting() code below
  */
-	define('ENVIRONMENT', isset($_SERVER['CI_ENV']) ? $_SERVER['CI_ENV'] : 'development');
+	if ( ! function_exists('sm_load_env'))
+	{
+		function sm_load_env($path)
+		{
+			if ( ! is_file($path) || ! is_readable($path))
+			{
+				return;
+			}
+
+			$lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+			foreach ($lines as $line)
+			{
+				$line = trim($line);
+				if ($line === '' || strpos($line, '#') === 0 || strpos($line, '=') === FALSE)
+				{
+					continue;
+				}
+
+				list($name, $value) = explode('=', $line, 2);
+				$name = trim($name);
+				$value = trim($value);
+
+				if ($name === '' || getenv($name) !== FALSE)
+				{
+					continue;
+				}
+
+				if ((strpos($value, '"') === 0 && substr($value, -1) === '"') || (strpos($value, "'") === 0 && substr($value, -1) === "'"))
+				{
+					$value = substr($value, 1, -1);
+				}
+
+				putenv($name.'='.$value);
+				$_ENV[$name] = $value;
+				$_SERVER[$name] = $value;
+			}
+		}
+	}
+
+	sm_load_env(__DIR__.DIRECTORY_SEPARATOR.'.env');
+
+	define('ENVIRONMENT', getenv('CI_ENV') !== FALSE ? getenv('CI_ENV') : (isset($_SERVER['CI_ENV']) ? $_SERVER['CI_ENV'] : 'development'));
 
 /*
  *---------------------------------------------------------------

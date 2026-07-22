@@ -11,7 +11,7 @@
 	var navbarRefreshTimer = null;
 	var currentAlertSignature = '';
 	var pullInFlight = false;
-	var pullDisabled = false;
+	var pullDisabledServers = {};
 	var lastPullAt = 0;
 	var lastPullServerId = '';
 
@@ -612,8 +612,9 @@
 		var deferred = $.Deferred();
 		var now = Date.now();
 		var targetServerId = String(serverId || '');
+		var disabledKey = targetServerId || 'default';
 
-		if (pullDisabled || pullInFlight || (targetServerId === lastPullServerId && now - lastPullAt < 2500)) {
+		if (pullDisabledServers[disabledKey] || pullInFlight || (targetServerId === lastPullServerId && now - lastPullAt < 2500)) {
 			return deferred.resolve().promise();
 		}
 
@@ -629,7 +630,7 @@
 			})
 			.fail(function (xhr) {
 				if (xhr.status === 404) {
-					pullDisabled = true;
+					pullDisabledServers[disabledKey] = true;
 				}
 			})
 			.always(function () {

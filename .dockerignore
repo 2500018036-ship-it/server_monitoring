@@ -1,0 +1,15 @@
+.git
+.agents
+.env
+.env.*
+!.env.example
+vendor
+application/cache/*
+application/logs/*
+uploads/backup/*
+uploads/files/*
+uploads/tmp/*
+agent/__pycache__/
+__pycache__/
+*.pyc
+*.log

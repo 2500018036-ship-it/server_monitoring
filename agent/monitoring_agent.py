@@ -515,6 +515,14 @@ def logs_payload():
 			})
 
 	items = unique_logs(items)
+	if not items:
+		items.append({
+			"log_type": "system",
+			"level": "warning",
+			"source": "collector",
+			"message": "Tidak ada log yang bisa dibaca oleh user agent. Cek akses journalctl, docker, atau file /var/log.",
+			"logged_at": now_string(),
+		})
 	return items[-50:]
 
 

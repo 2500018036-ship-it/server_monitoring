@@ -1,6 +1,18 @@
 <?php
 defined('BASEPATH') OR exit('No direct script access allowed');
 
+$env = function ($key, $default = NULL) {
+	$value = getenv($key);
+
+	return $value === FALSE ? $default : $value;
+};
+
+$env_bool = function ($key, $default = FALSE) use ($env) {
+	$value = strtolower((string) $env($key, $default ? 'true' : 'false'));
+
+	return in_array($value, array('1', 'true', 'yes', 'on'), TRUE);
+};
+
 /*
 |--------------------------------------------------------------------------
 | Base Site URL
@@ -23,7 +35,7 @@ defined('BASEPATH') OR exit('No direct script access allowed');
 | a PHP script and you can easily do that on your own.
 |
 */
-$config['base_url'] = 'http://localhost/monitoring_server/';
+$config['base_url'] = $env('APP_BASE_URL', 'http://localhost/monitoring_server/');
 
 /*
 |--------------------------------------------------------------------------
@@ -35,7 +47,7 @@ $config['base_url'] = 'http://localhost/monitoring_server/';
 | variable so that it is blank.
 |
 */
-$config['index_page'] = 'index.php';
+$config['index_page'] = $env('APP_INDEX_PAGE', 'index.php');
 
 /*
 |--------------------------------------------------------------------------
@@ -225,7 +237,7 @@ $config['allow_get_array'] = TRUE;
 | your log files will fill up very fast.
 |
 */
-$config['log_threshold'] = 0;
+$config['log_threshold'] = (int) $env('APP_LOG_THRESHOLD', 0);
 
 /*
 |--------------------------------------------------------------------------
@@ -326,7 +338,7 @@ $config['cache_query_string'] = FALSE;
 | https://codeigniter.com/userguide3/libraries/encryption.html
 |
 */
-$config['encryption_key'] = 'server-monitoring-phase-1-foundation-key-2026';
+$config['encryption_key'] = $env('APP_ENCRYPTION_KEY', 'server-monitoring-phase-1-foundation-key-2026');
 
 /*
 |--------------------------------------------------------------------------
@@ -384,10 +396,10 @@ $config['encryption_key'] = 'server-monitoring-phase-1-foundation-key-2026';
 |
 */
 $config['sess_driver'] = 'database';
-$config['sess_cookie_name'] = 'server_monitoring_session';
-$config['sess_samesite'] = 'Lax';
-$config['sess_expiration'] = 3600;
-$config['sess_save_path'] = 'sessions';
+$config['sess_cookie_name'] = $env('APP_SESSION_COOKIE', 'server_monitoring_session');
+$config['sess_samesite'] = $env('APP_SESSION_SAMESITE', 'Lax');
+$config['sess_expiration'] = (int) $env('APP_SESSION_EXPIRATION', 3600);
+$config['sess_save_path'] = $env('APP_SESSION_SAVE_PATH', 'sessions');
 $config['sess_match_ip'] = FALSE;
 $config['sess_time_to_update'] = 300;
 $config['sess_regenerate_destroy'] = TRUE;
@@ -411,7 +423,7 @@ $config['sess_regenerate_destroy'] = TRUE;
 $config['cookie_prefix']	= '';
 $config['cookie_domain']	= '';
 $config['cookie_path']		= '/';
-$config['cookie_secure']	= FALSE;
+$config['cookie_secure']	= $env_bool('APP_COOKIE_SECURE', FALSE);
 $config['cookie_httponly'] 	= TRUE;
 $config['cookie_samesite'] 	= 'Lax';
 
@@ -457,7 +469,7 @@ $config['global_xss_filtering'] = FALSE;
 | 'csrf_regenerate' = Regenerate token on every submission
 | 'csrf_exclude_uris' = Array of URIs which ignore CSRF checks
 */
-$config['csrf_protection'] = TRUE;
+$config['csrf_protection'] = $env_bool('APP_CSRF_PROTECTION', TRUE);
 $config['csrf_token_name'] = 'csrf_server_monitoring';
 $config['csrf_cookie_name'] = 'csrf_server_monitoring_cookie';
 $config['csrf_expire'] = 7200;
